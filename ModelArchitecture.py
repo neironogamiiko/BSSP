@@ -38,6 +38,9 @@ class PAM(nn.Module):
         # gamma як PT nn.Parameter замінює TF weight.
 
         self.gamma = nn.Parameter(torch.zeros(1))
+        # Параметр gamma масштабує внесок модуля уваги.
+        # Початково gamma = 0, щоб мережа могла спершу навчитися базових ознак без уваги.
+
         self.in_channels = in_channels
         self.mid_channels = self.in_channels//8
 
@@ -73,7 +76,8 @@ class PAM(nn.Module):
                                                             C - кількість каналів,
                                                             H - висота зображення,
                                                             W - ширина зображення.
-        :return: Вихідний тензор того ж розміру, що й вхідний (B, C, H, W), з застосованою позиційною увагою та залишковим підключенням.
+        :return: Вихідний тензор того ж розміру, що й вхідний (B, C, H, W),
+        з застосованою позиційною увагою та залишковим підключенням.
         """
         batch, channels, height, weight = x.size()
 
@@ -97,3 +101,55 @@ class PAM(nn.Module):
 
     # Функціонально, PT відповідає TF, з невеликою технічною відмінністю у ініціалізації, що може повпливати на...
     # ... процес тренування, а саме на швидкість збіжності на початкових епохах.
+
+class CAM(nn.Module):
+    """
+    Channel Attention Module (CAM) — модуль уваги по каналах.
+
+    Цей модуль обчислює, як сильно кожен канал вхідного тензору взаємодіє з іншими каналами,
+    і використовує це для масштабування вихідного тензору.
+    Основна ідея: створити матрицю уваги між каналами, яка показує взаємозв'язок каналів
+    всередині одного зображення.
+
+    Вхід:
+        x: тензор розміру (batch, channels, height, width) — PyTorch формат channels_first.
+
+    Вихід:
+        out: тензор того ж розміру, що і вхід, з доданим ефектом уваги по каналах.
+    """
+    def __init__(self, in_channels):
+        """
+        Ініціалізація CAM.
+        :param in_channels: кількість каналів у вхідному тензорі.
+        """
+        super(CAM, self).__init__()
+        self.gamma = nn.Parameter(torch.zeros(1))
+        # Параметр gamma масштабує внесок модуля уваги.
+        # Початково gamma = 0, щоб мережа могла спершу навчитися базових ознак без уваги.
+
+    # На кожному етапі треба бути уважним з softmax, щоб не переплутати канали.
+
+    def forward(self, x):
+        """
+        Forward-процес:
+            1. Перетворення в (batch, height*width, channels).
+            2. Обчислення матриці уваги.
+            3. Застосування матриці уваги до векторизованих каналів.
+            4. Відновлення форми тензору до PyTorch формату (batch, channels, height, width).
+            5. Масштабування та резидуальна сумісність.
+        :param x: вхідний тензор (batch, channels, height, width)
+        :return: вихідний тензор того ж розміру.
+        """
+        batch, channels, height, weight = x.size()
+        a = x.permute(0,2,3,1).reshape(batch, height*weight, channels)
+        # Для кожного прикладу в батчі і кожного каналу channels описуємо вектор розміром height*weight, який містить всі пікселі цього каналу.
+        # Тобто, `a` - це векторизоване представлення вхідного зображення по кожному каналу.
+
+        attention_map = nn.functional.softmax(torch.bmm(a.transpose(1,2), a), dim=-1) # (batch, channels, channels)
+        # Описуємо матрицю уваги по каналах для кожного прикладу в батчі.
+        # Як сильно кожен канал взаємодіє з іншими каналами, в межах одного зображення.
+
+        output = torch.bmm(a, attention_map) # (batch, height*weight, channels)
+        output = output.view(batch, height, weight, channels).permute(0,3,1,2) # назад в (batch, channels, height, weight)
+        output = self.gamma * output + x
+        return output
