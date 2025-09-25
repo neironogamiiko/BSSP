@@ -42,24 +42,24 @@ class PAM(nn.Module):
         # Початково gamma = 0, щоб мережа могла спершу навчитися базових ознак без уваги.
 
         self.in_channels = in_channels
-        self.mid_channels = self.in_channels//8
+        self.mid_channels = max(1, self.in_channels // 8)
 
         # Структурно in_channels -> filters, тобто mid_channels = filters//8
         # nn.Conv2d, за замовчуванням, використовує `kaiming_uniform_`, а TensorFlow використовує `he_normal`
         # Формально, це різниця у ініціалізації, але функціонально вони працюють однаково.
 
-        self.conv4b = nn.Conv2d(in_channels,
+        self.conv4b = nn.Conv2d(self.in_channels,
                                 self.mid_channels,
                                 kernel_size=1,
                                 bias=False)
 
-        self.conv4c = nn.Conv2d(in_channels,
+        self.conv4c = nn.Conv2d(self.in_channels,
                                 self.mid_channels,
                                 kernel_size=1,
                                 bias=False)
 
-        self.conv4d = nn.Conv2d(in_channels,
-                                self.mid_channels,
+        self.conv4d = nn.Conv2d(self.in_channels,
+                                self.in_channels,
                                 kernel_size=1,
                                 bias=False)
 
@@ -79,22 +79,23 @@ class PAM(nn.Module):
         :return: Вихідний тензор того ж розміру, що й вхідний (B, C, H, W),
         з застосованою позиційною увагою та залишковим підключенням.
         """
-        batch, channels, height, weight = x.size()
+        batch, channels, height, width = x.size()
 
         # TF reshape та transpose -> PT view та permute
         # vec_b: B, H*W, C//8
         # vec_cT: B, C//8, H*W
         # bcT = vec_B @ vec_cT -> B, H*W, H*W
 
-        b = self.conv4b(x).view(batch, self.mid_channels, -1).permute(0,2,1) # (batch, height*weight, cannels//8)
-        c = self.conv4c(x).view(batch, self.mid_channels, -1) # (batch, cannels//8, height*weight)
-        d = self.conv4d(x).view(batch, channels, -1).permute(0,2,1) # (batch, height*weight, height*weight)
+        b = self.conv4b(x).view(batch, self.mid_channels, -1).permute(0, 2, 1) # (batch, height*width, cannels//8)
+        c = self.conv4c(x).view(batch, self.mid_channels, -1) # (batch, cannels//8, height*width)
+        d = self.conv4d(x).view(batch, channels, -1).permute(0, 2, 1)  # (batch, height*width, cannels)
 
         # Формально, розміри тензорів однакові, а батч-матричне множення має давати точно такий самий результат.
 
         # TF Activation('softmax'(bcT) відбувається по останній осі. Значить, для PT остання вісь - це `dim=-1`.
         attention_map = nn.functional.softmax(torch.bmm(b, c), dim=-1)
-        output = torch.bmm(attention_map, d).permute(0,2,1).view(batch, channels, height. weight)
+        output = torch.bmm(attention_map, d)
+        output = output.view(batch, height, width, channels).permute(0, 3, 1, 2)
         output = self.gamma * output + x
 
         return output
@@ -140,16 +141,16 @@ class CAM(nn.Module):
         :param x: вхідний тензор (batch, channels, height, width)
         :return: вихідний тензор того ж розміру.
         """
-        batch, channels, height, weight = x.size()
-        a = x.permute(0,2,3,1).reshape(batch, height*weight, channels)
-        # Для кожного прикладу в батчі і кожного каналу channels описуємо вектор розміром height*weight, який містить всі пікселі цього каналу.
+        batch, channels, height, width = x.size()
+        a = x.permute(0,2,3,1).reshape(batch, height*width, channels)
+        # Для кожного прикладу в батчі й кожного каналу channels описуємо вектор розміром height*width, який містить всі пікселі цього каналу.
         # Тобто, `a` - це векторизоване представлення вхідного зображення по кожному каналу.
 
         attention_map = nn.functional.softmax(torch.bmm(a.transpose(1,2), a), dim=-1) # (batch, channels, channels)
         # Описуємо матрицю уваги по каналах для кожного прикладу в батчі.
         # Як сильно кожен канал взаємодіє з іншими каналами, в межах одного зображення.
 
-        output = torch.bmm(a, attention_map) # (batch, height*weight, channels)
-        output = output.view(batch, height, weight, channels).permute(0,3,1,2) # назад в (batch, channels, height, weight)
+        output = torch.bmm(a, attention_map) # (batch, height*width, channels)
+        output = output.view(batch, height, width, channels).permute(0,3,1,2) # назад в (batch, channels, height, width)
         output = self.gamma * output + x
         return output
