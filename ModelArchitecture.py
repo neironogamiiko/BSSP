@@ -1,6 +1,9 @@
 import torch
 from torch import nn, optim
 
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Current device: {device}")
+
 # Необхідно врахувати:
 # TF приймає на вході тензори виду NHWC (batch, height, weight, channels).
 # PT приймає на вході тензори виду NCHW (batch, channels. height, weight).
@@ -22,7 +25,7 @@ class PAM(nn.Module):
     Вихід:
         torch.Tensor: Вихідний тензор того ж розміру, що й вхідний, з застосованою позиційною увагою.
     """
-    def __init__(self, in_channels):
+    def __init__(self, in_channels: int):
         """
         Атрибути:
             gamma (nn.Parameter): Навчальний скаляр, який масштабує вихід уваги.
@@ -63,7 +66,7 @@ class PAM(nn.Module):
                                 kernel_size=1,
                                 bias=False)
 
-    def forward(self, x):
+    def forward(self, x:torch.Tensor) -> torch.Tensor:
         """
         Forward-процес:
             1. Перетворює вхід через три 1x1 згортки: b, c, d.
@@ -71,6 +74,7 @@ class PAM(nn.Module):
             3. Обчислює матрицю уваги (attention_map) через softmax(b @ c).
             4. Множить attention_map на d, щоб отримати вихід уваги.
             5. Застосовує навчальний скаляр gamma та додає залишкове підключення до x.
+
         :param x: Вхідний тензор розміром (B, C, H, W), де
                                                             B - розмір батчу,
                                                             C - кількість каналів,
@@ -123,10 +127,9 @@ class CAM(nn.Module):
     Вихід:
         out: тензор того ж розміру, що і вхід, з доданим ефектом уваги по каналах.
     """
-    def __init__(self, in_channels):
+    def __init__(self):
         """
         Ініціалізація CAM.
-        :param in_channels: кількість каналів у вхідному тензорі.
         """
         super(CAM, self).__init__()
         self.gamma = nn.Parameter(torch.zeros(1))
@@ -135,7 +138,7 @@ class CAM(nn.Module):
 
     # На кожному етапі треба бути уважним з softmax, щоб не переплутати канали.
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward-процес:
             1. Перетворення в (batch, height*width, channels).
@@ -143,6 +146,7 @@ class CAM(nn.Module):
             3. Застосування матриці уваги до векторизованих каналів.
             4. Відновлення форми тензору до PyTorch формату (batch, channels, height, width).
             5. Масштабування та резидуальна сумісність.
+
         :param x: вхідний тензор (batch, channels, height, width)
         :return: вихідний тензор того ж розміру.
         """
@@ -161,3 +165,80 @@ class CAM(nn.Module):
         output = output.view(batch, height, width, channels).permute(0,3,1,2) # назад в (batch, channels, height, width)
         output = self.gamma * output + x
         return output
+
+class MSI(nn.Module):
+    """
+    Multi-Scale Input Block (MSI) - це блок, який поєднує два тензори з різних джерел,
+    приводячи їх до однакової кількості каналів через 1x1 згортку, а потім об’єднує по каналах.
+
+    Вхід:
+        x (torch.Tensor): Тензор розміром (batch_size, in_channels, H, W)
+        inputs (torch.Tensor): Тензор розміром (batch_size, inputs_channels, H, W)
+
+    Вихід:
+        torch.Tensor: Об’єднаний тензор розміром (batch_size, out_channels*2, H, W)
+    """
+    def __init__(self, in_channels: int, inputs_channels: int, out_channels: int):
+        """
+        Ініціалізація MSI-блоку.
+
+        :param in_channels: кількість каналів першого входу `x`.
+        :param inputs_channels: кількість каналів другого входу `inputs`.
+        :param out_channels: кількість каналів після 1x1 згортки для кожного входу.
+        """
+        super(MSI, self).__init__()
+        self.in_channels = in_channels
+        self.inputs_channels = inputs_channels
+        self.out_channels = out_channels
+
+        # Згортка для першого блоку.
+        self.conv4x = nn.Sequential(
+            nn.Conv2d(self.in_channels,
+                      self.out_channels,
+                      kernel_size=1,
+                      padding=0,
+                      bias=False),
+            nn.BatchNorm2d(self.out_channels),
+            nn.ReLU(inplace=True)
+        )
+
+        # Згортка для другого блоку.
+        self.conv4inputs = nn.Sequential(
+            nn.Conv2d(self.inputs_channels,
+                      self.out_channels,
+                      kernel_size=1,
+                      padding=0,
+                      bias=False),
+            nn.BatchNorm2d(self.out_channels),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x: torch.Tensor, inputs):
+        """
+        Forward-процес:
+            1. Пропуск першого входу `x` через 1x1 згортку, BatchNorm і ReLU:
+               - Вихід: (batch_size, out_channels, H, W)
+            2. Пропуск другого входу `inputs` через свій 1x1 блок:
+               - Вихід: (batch_size, out_channels, H, W)
+            3. Конкатенація обох виходів по каналах (dim=1):
+               - Результат: (batch_size, out_channels*2, H, W)
+
+        :param x: вхідний тензор першого потоку (batch, in_channels, H, W).
+        :param inputs: вхідний тензор другого потоку (batch, inputs_channels, H, W).
+        :return: об’єднаний тензор (batch, out_channels*2, H, W).
+        """
+        x = self.conv4x(x)
+        inputs = self.conv4inputs(inputs)
+        return torch.cat([x, inputs], dim=1)
+
+    # PyTorch `nn.BatchNorm2d` і TensorFlow `BatchNormalization` обчислюють нормалізацію трохи по-різному.
+    # Наприклад, PyTorch використовує eps=1e-5 за замовчуванням, а TF — epsilon=1e-3.
+    # Ця різниця у epsilon сильно впливає на точність при маленьких розмірах батчу.
+
+    # Після кількох епох навчання, початкові дрібні числові відмінності нівелюються.
+    # Результат моделі на PyTorch та TF буде практично однаковим, якщо архітектура й оптимізація збігаються.
+    # Єдина відмінність - це початкові ваги, але вони впливають лише на перші кроки тренування.
+
+    # У разі необхідності максимального наближення результатів можна:
+    # 1) виставити eps=1e-3 у PyTorch BatchNorm2d;
+    # 2) не використовувати inplace=True для ReLU.
