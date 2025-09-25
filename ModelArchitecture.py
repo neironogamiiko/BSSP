@@ -93,8 +93,13 @@ class PAM(nn.Module):
         # Формально, розміри тензорів однакові, а батч-матричне множення має давати точно такий самий результат.
 
         # TF Activation('softmax'(bcT) відбувається по останній осі. Значить, для PT остання вісь - це `dim=-1`.
-        attention_map = nn.functional.softmax(torch.bmm(b, c), dim=-1)
-        output = torch.bmm(attention_map, d)
+        attention_map = nn.functional.softmax(torch.bmm(b, c), dim=-1) # матриця уваги між пікселями
+        # Описуємо матрицю уваги по каналах для кожного прикладу в батчі.
+        # Як сильно кожен канал взаємодіє з іншими каналами, в межах одного зображення.
+
+        output = torch.bmm(attention_map, d) # Застосування уваги
+
+        # Відновлення розміру та резидуальне додавання
         output = output.view(batch, height, width, channels).permute(0, 3, 1, 2)
         output = self.gamma * output + x
 
@@ -151,6 +156,8 @@ class CAM(nn.Module):
         # Як сильно кожен канал взаємодіє з іншими каналами, в межах одного зображення.
 
         output = torch.bmm(a, attention_map) # (batch, height*width, channels)
+
+        # Відновлення розміру та резидуальне додавання
         output = output.view(batch, height, width, channels).permute(0,3,1,2) # назад в (batch, channels, height, width)
         output = self.gamma * output + x
         return output
