@@ -178,42 +178,42 @@ class MSI(nn.Module):
     Вихід:
         torch.Tensor: Об’єднаний тензор розміром (batch_size, out_channels*2, H, W)
     """
-    def __init__(self, in_channels: int, inputs_channels: int, out_channels: int):
+    def __init__(self, main_in_channels: int, aux_in_channels: int, branch_out_channels: int):
         """
         Ініціалізація MSI-блоку.
 
-        :param in_channels: кількість каналів першого входу `x`.
-        :param inputs_channels: кількість каналів другого входу `inputs`.
-        :param out_channels: кількість каналів після 1x1 згортки для кожного входу.
+        :param main_in_channels: кількість каналів першого входу `x`.
+        :param aux_in_channels: кількість каналів другого входу `inputs`.
+        :param branch_out_channels: кількість каналів після 1x1 згортки для кожного входу.
         """
         super(MSI, self).__init__()
-        self.in_channels = in_channels
-        self.inputs_channels = inputs_channels
-        self.out_channels = out_channels
+        self.main_in_channels = main_in_channels
+        self.aux_in_channels = aux_in_channels
+        self.branch_out_channels = branch_out_channels
 
         # Згортка для першого блоку.
-        self.conv4x = nn.Sequential(
-            nn.Conv2d(self.in_channels,
-                      self.out_channels,
+        self.main_conv = nn.Sequential(
+            nn.Conv2d(self.main_in_channels,
+                      self.branch_out_channels,
                       kernel_size=1,
                       padding=0,
                       bias=False),
-            nn.BatchNorm2d(self.out_channels),
+            nn.BatchNorm2d(self.branch_out_channels),
             nn.ReLU(inplace=True)
         )
 
         # Згортка для другого блоку.
-        self.conv4inputs = nn.Sequential(
-            nn.Conv2d(self.inputs_channels,
-                      self.out_channels,
+        self.aux_conv = nn.Sequential(
+            nn.Conv2d(self.aux_in_channels,
+                      self.branch_out_channels,
                       kernel_size=1,
                       padding=0,
                       bias=False),
-            nn.BatchNorm2d(self.out_channels),
+            nn.BatchNorm2d(self.branch_out_channels),
             nn.ReLU(inplace=True)
         )
 
-    def forward(self, x: torch.Tensor, inputs):
+    def forward(self, main_input: torch.Tensor, aux_input: torch.Tensor) -> torch.Tensor:
         """
         Forward-процес:
             1. Пропуск першого входу `x` через 1x1 згортку, BatchNorm і ReLU:
@@ -223,13 +223,13 @@ class MSI(nn.Module):
             3. Конкатенація обох виходів по каналах (dim=1):
                - Результат: (batch_size, out_channels*2, H, W)
 
-        :param x: вхідний тензор першого потоку (batch, in_channels, H, W).
-        :param inputs: вхідний тензор другого потоку (batch, inputs_channels, H, W).
+        :param main_input: вхідний тензор першого потоку (batch, in_channels, H, W).
+        :param aux_input: вхідний тензор другого потоку (batch, inputs_channels, H, W).
         :return: об’єднаний тензор (batch, out_channels*2, H, W).
         """
-        x = self.conv4x(x)
-        inputs = self.conv4inputs(inputs)
-        return torch.cat([x, inputs], dim=1)
+        main_input = self.main_conv(main_input)
+        aux_input = self.aux_conv(aux_input)
+        return torch.cat([main_input, aux_input], dim=1)
 
     # PyTorch `nn.BatchNorm2d` і TensorFlow `BatchNormalization` обчислюють нормалізацію трохи по-різному.
     # Наприклад, PyTorch використовує eps=1e-5 за замовчуванням, а TF — epsilon=1e-3.
