@@ -1,3 +1,7 @@
+from pydoc import replace
+from pyexpat import features
+from unittest.mock import inplace
+
 import torch
 from torch import nn, optim
 
@@ -66,14 +70,19 @@ class PAM(nn.Module):
                                 kernel_size=1,
                                 bias=False)
 
-        self.reset_parameters()  # Примусово ініціалізуємо Conv2d як he_normal (відповідник TF)
+        self._reset_parameters()  # Примусово ініціалізуємо Conv2d як he_normal (відповідник TF)
 
-    def reset_parameters(self):
+    def _reset_parameters(self):
         # TF: kernel_initializer='he_normal' → PT: kaiming_normal_
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
-
+        for module in self.modules():
+            if isinstance(module, nn.Conv2d):
+                nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='relu')
+                # kaiming_normal_ - це функція ініціалізації, яка заповнює тензор випадковими числами з нормального розподілу.
+                # module.weight - ваги шару, які треба ініціалізувати.
+                # 'fan_in' означає, що дисперсія масштабована від кількості вхідних нейронів (кількості вхідних каналів * розмір фільтра).
+                # Це дозволяє зберегти стабільну дисперсію на вході активації.
+                # nonlinearity='relu' - ініціалізація враховує тип активації після шару.
+                # Для ReLU треба трохи інший масштаб, ніж для сигмоїди чи tanh, бо ReLU "обрізає" негативні значення.
 
     def forward(self, x:torch.Tensor) -> torch.Tensor:
         """
@@ -222,13 +231,12 @@ class MSI(nn.Module):
             nn.ReLU(inplace=False)
         )
 
-        self.reset_parameters()  # Примусова ініціалізація ваг як у TF
+        self._reset_parameters()  # Примусова ініціалізація ваг як у TF
 
-    def reset_parameters(self):
-        # Відповідає kernel_initializer='he_normal' у TensorFlow
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
+    def _reset_parameters(self):
+        for module in self.modules():
+            if isinstance(module, nn.Conv2d):
+                nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='relu')
 
     def forward(self, main_input: torch.Tensor, aux_input: torch.Tensor) -> torch.Tensor:
         """
@@ -259,3 +267,226 @@ class MSI(nn.Module):
     # У разі необхідності максимального наближення результатів можна:
     # 1) виставити eps=1e-3 у PyTorch BatchNorm2d;
     # 2) не використовувати inplace=True для ReLU.
+
+class Convolution(nn.Module):
+    def __init__(self, in_channel, out_channel, eps=1e-3, momentum=.99):
+        super(Convolution, self).__init__()
+        self.conv_block = nn.Sequential(
+            nn.Conv2d(in_channels=in_channel,
+                      out_channels=out_channel,
+                      kernel_size=3,
+                      padding=1,
+                      bias=False),
+            nn.BatchNorm2d(out_channel,
+                           eps=eps,
+                           momentum=momentum),
+            nn.ReLU(inplace=False),
+            nn.Conv2d(in_channels=out_channel,
+                      out_channels=out_channel,
+                      kernel_size=3,
+                      padding=1,
+                      bias=False),
+            nn.BatchNorm2d(out_channel,
+                           eps=eps,
+                           momentum=momentum),
+            nn.ReLU(inplace=False)
+        )
+
+    def forward(self, x):
+        return self.conv_block(x)
+
+def _init_he_normal(module):
+    if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
+        nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='relu')
+        if getattr(module, 'bias', None) is not None:
+            nn.init.zeros_(module.bias)
+    if isinstance(module, nn.BatchNorm2d):
+        nn.init.ones_(module.weight)
+        nn.init.zeros_(module.bias)
+
+class BSSPNet(nn.Module):
+    def __init__(self, in_channels, base=16, scale=2, num_classes=20,
+                 eps=1e-3, momentum=.99, dropout=.5):
+        super(BSSPNet, self).__init__()
+        self.in_channels = in_channels
+        self.base = base
+        self.scale = scale
+        self.num_classes = num_classes
+        self.eps = eps
+        self.momentum = momentum
+        self.dropout = dropout
+
+        self.conv_1 = Convolution(in_channel=in_channels,
+                                  out_channel=base,
+                                  eps=eps,
+                                  momentum=momentum)
+        # AvgPool2d in forward
+
+        def branch_out_for(level):
+            target = base * (scale ** level)
+            return target // 2
+
+        self.msi_2 = MSI(main_in_channels=base,
+                        aux_in_channels=in_channels,
+                        branch_out_channels=branch_out_for(1))
+
+        self.conv_2 = Convolution(in_channel=base * scale,
+                                  out_channel=base * scale,
+                                  eps=eps,
+                                  momentum=momentum)
+
+        self.msi_3 = MSI(main_in_channels=base * scale,
+                        aux_in_channels=in_channels,
+                        branch_out_channels=branch_out_for(2))
+
+        self.conv_3 = Convolution(in_channel= base * (scale ** 2),
+                                  out_channel= base * (scale ** 2),
+                                  eps=eps,
+                                  momentum=momentum)
+
+        self.msi_4 = MSI(main_in_channels=base * (scale ** 2),
+                         aux_in_channels=in_channels,
+                         branch_out_channels=branch_out_for(3))
+
+        self.conv_4 = Convolution(in_channel=base * (scale ** 3),
+                                  out_channel=base * (scale ** 3),
+                                  eps=eps,
+                                  momentum=momentum)
+
+        self.msi_5 = MSI(main_in_channels=base * (scale ** 3),
+                        aux_in_channels=in_channels,
+                        branch_out_channels=branch_out_for(4))
+
+        self.conv_5 = Convolution(in_channel=base * (scale ** 4),
+                                  out_channel=base * (scale ** 4),
+                                  eps=eps,
+                                  momentum=momentum)
+
+        self.pam = PAM(in_channels=base * (scale ** 4))
+        self.cam = CAM()
+
+        self.feature_conv = nn.Conv2d(in_channels=base * (scale ** 4),
+                                      out_channels=base * (scale ** 4),
+                                      kernel_size=3,
+                                      padding=1,
+                                      bias=False)
+        self.feature_batchnorm = nn.BatchNorm2d(base * (scale ** 4),
+                                                eps=eps,
+                                                momentum=momentum)
+        self.dropout = nn.Dropout(dropout)
+
+        self.up_6_conv_1 = nn.ConvTranspose2d(in_channels=base * (scale ** 4),
+                                              out_channels=base * (scale ** 3),
+                                              kernel_size=2,
+                                              stride=2,
+                                              padding=0,
+                                              bias=False)
+        self.up_6_conv_2 = nn.ConvTranspose2d(in_channels=base * (scale ** 4),
+                                              out_channels=base * (scale ** 3),
+                                              kernel_size=2,
+                                              stride=4,
+                                              padding=0,
+                                              bias=False)
+
+        self.conv_6 = Convolution(in_channel=base * (scale ** 3) * 2,
+                                  out_channel=base * (scale ** 3),
+                                  eps=eps,
+                                  momentum=momentum)
+
+        self.conv_7 = Convolution(in_channel=base * (scale ** 2) * 2,
+                                  out_channel=base * (scale ** 2),
+                                  eps=eps,
+                                  momentum=momentum)
+
+        self.conv_8 = Convolution(in_channel=base * scale * 2,
+                                  out_channel=base * scale,
+                                  eps=eps,
+                                  momentum=momentum)
+
+        self.conv_9 = Convolution(in_channel=base * 2,
+                                  out_channel=base,
+                                  eps=eps,
+                                  momentum=momentum)
+
+        self.inter_out_1 = nn.Conv2d(in_channels=base,
+                                     out_channels=num_classes,
+                                     kernel_size=3,
+                                     padding=1)
+
+        self.conv_11 = Convolution(in_channel=base * 2,
+                                   out_channel=base,
+                                   eps=eps,
+                                   momentum=momentum)
+
+        self.conv_22 = Convolution(in_channel=base * scale + base,
+                                   out_channel=base * scale,
+                                   eps=eps,
+                                   momentum=momentum)
+
+        self.conv_33 = Convolution(in_channel=base * (scale ** 2) + base * scale,
+                                   out_channel=base * (scale ** 2),
+                                   eps=eps,
+                                   momentum=momentum)
+
+        self.conv_44 = Convolution(in_channel=base * (scale ** 3) * 2,
+                                   out_channel=base * (scale ** 3),
+                                   eps=eps,
+                                   momentum=momentum)
+
+        self.conv77 = Convolution(in_channel=base * (scale ** 2) * 2,
+                                  out_channel=base * (scale ** 2),
+                                  eps=eps,
+                                  momentum=momentum)
+
+        self.conv88 = Convolution(in_channel=base * scale * 2,
+                                  out_channel=base * scale,
+                                  eps=eps,
+                                  momentum=momentum)
+
+        self.conv99 = Convolution(in_channel=base * 2,
+                                  out_channel=base,
+                                  eps=eps,
+                                  momentum=momentum)
+
+        self.inter_out_2 = nn.Conv2d(in_channels=base,
+                                     out_channels=num_classes,
+                                     kernel_size=3,
+                                     padding=1)
+
+        self.conv_111 = Convolution(in_channel=base * 2,
+                                    out_channel=base,
+                                    eps=eps,
+                                    momentum=momentum)
+
+        self.conv_222 = Convolution(in_channel=base * scale + base,
+                                    out_channel=base * scale,
+                                    eps=eps,
+                                    momentum=momentum)
+
+        self.conv_333 = Convolution(in_channel=base * (scale ** 2) * 2 + base * scale,
+                                    eps=eps,
+                                    momentum=momentum)
+
+        self.conv_888 = Convolution(in_channel=base * scale * 2,
+                                    out_channel=base * scale,
+                                    eps=eps,
+                                    momentum=momentum)
+
+        self.conv_999 = Convolution(in_channel=base * 2,
+                                    out_channel=base,
+                                    eps=eps,
+                                    momentum=momentum)
+
+        self.inter_out3 = nn.Conv2d(in_channels=base,
+                                    out_channels=num_classes,
+                                    kernel_size=3,
+                                    padding=1)
+
+        self.apply(_init_he_normal)
+        for module in self.modules():
+            if isinstance(module, nn.BatchNorm2d):
+                module.eps = eps
+                module.momentum = momentum
+
+    def forward(self, x):
+        pass
