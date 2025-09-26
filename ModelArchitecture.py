@@ -66,6 +66,15 @@ class PAM(nn.Module):
                                 kernel_size=1,
                                 bias=False)
 
+        self.reset_parameters()  # Примусово ініціалізуємо Conv2d як he_normal (відповідник TF)
+
+    def reset_parameters(self):
+        # TF: kernel_initializer='he_normal' → PT: kaiming_normal_
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
+
+
     def forward(self, x:torch.Tensor) -> torch.Tensor:
         """
         Forward-процес:
@@ -198,8 +207,8 @@ class MSI(nn.Module):
                       kernel_size=1,
                       padding=0,
                       bias=False),
-            nn.BatchNorm2d(self.branch_out_channels),
-            nn.ReLU(inplace=True)
+            nn.BatchNorm2d(self.branch_out_channels, eps=1e-3),
+            nn.ReLU(inplace=False)
         )
 
         # Згортка для другого блоку.
@@ -209,9 +218,17 @@ class MSI(nn.Module):
                       kernel_size=1,
                       padding=0,
                       bias=False),
-            nn.BatchNorm2d(self.branch_out_channels),
-            nn.ReLU(inplace=True)
+            nn.BatchNorm2d(self.branch_out_channels, eps=1e-3), # Встановлено eps=1e-3 для відповідності TF epsilon
+            nn.ReLU(inplace=False)
         )
+
+        self.reset_parameters()  # Примусова ініціалізація ваг як у TF
+
+    def reset_parameters(self):
+        # Відповідає kernel_initializer='he_normal' у TensorFlow
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
 
     def forward(self, main_input: torch.Tensor, aux_input: torch.Tensor) -> torch.Tensor:
         """
