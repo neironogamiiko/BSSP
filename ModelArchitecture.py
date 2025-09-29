@@ -3,6 +3,7 @@ from pyexpat import features
 from unittest.mock import inplace
 
 import torch
+from networkx.algorithms.operators.product import tensor_product
 from torch import nn, optim
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -373,7 +374,7 @@ class BSSPNet(nn.Module):
         self.feature_batchnorm = nn.BatchNorm2d(base * (scale ** 4),
                                                 eps=eps,
                                                 momentum=momentum)
-        self.dropout = nn.Dropout(dropout)
+        self.drop = nn.Dropout(dropout)
 
         self.up_6_conv_1 = nn.ConvTranspose2d(in_channels=base * (scale ** 4),
                                               out_channels=base * (scale ** 3),
@@ -384,7 +385,7 @@ class BSSPNet(nn.Module):
         self.up_6_conv_2 = nn.ConvTranspose2d(in_channels=base * (scale ** 4),
                                               out_channels=base * (scale ** 3),
                                               kernel_size=2,
-                                              stride=4,
+                                              stride=2,
                                               padding=0,
                                               bias=False)
 
@@ -433,20 +434,20 @@ class BSSPNet(nn.Module):
                                    eps=eps,
                                    momentum=momentum)
 
-        self.conv77 = Convolution(in_channel=base * (scale ** 2) * 2,
-                                  out_channel=base * (scale ** 2),
-                                  eps=eps,
-                                  momentum=momentum)
+        self.conv_77 = Convolution(in_channel=base * (scale ** 2) * 2,
+                                   out_channel=base * (scale ** 2),
+                                   eps=eps,
+                                   momentum=momentum)
 
-        self.conv88 = Convolution(in_channel=base * scale * 2,
-                                  out_channel=base * scale,
-                                  eps=eps,
-                                  momentum=momentum)
+        self.conv_88 = Convolution(in_channel=base * scale * 2,
+                                   out_channel=base * scale,
+                                   eps=eps,
+                                   momentum=momentum)
 
-        self.conv99 = Convolution(in_channel=base * 2,
-                                  out_channel=base,
-                                  eps=eps,
-                                  momentum=momentum)
+        self.conv_99 = Convolution(in_channel=base * 2,
+                                   out_channel=base,
+                                   eps=eps,
+                                   momentum=momentum)
 
         self.inter_out_2 = nn.Conv2d(in_channels=base,
                                      out_channels=num_classes,
@@ -464,6 +465,7 @@ class BSSPNet(nn.Module):
                                     momentum=momentum)
 
         self.conv_333 = Convolution(in_channel=base * (scale ** 2) * 2 + base * scale,
+                                    out_channel=base * (scale ** 2),
                                     eps=eps,
                                     momentum=momentum)
 
@@ -489,4 +491,125 @@ class BSSPNet(nn.Module):
                 module.momentum = momentum
 
     def forward(self, x):
-        pass
+        inputs_1 = nn.functional.avg_pool2d(x,
+                                            kernel_size=2,
+                                            stride=2)
+        inputs_2 = nn.functional.avg_pool2d(x,
+                                            kernel_size=4,
+                                            stride=4)
+        inputs_3 = nn.functional.avg_pool2d(x,
+                                            kernel_size=8,
+                                            stride=8)
+        inputs_4 = nn.functional.avg_pool2d(x,
+                                            kernel_size=16,
+                                            stride=16)
+
+        conv_1 = self.conv_1(x) # (B, base, H, W)
+        pool_1 = nn.functional.avg_pool2d(conv_1, 2, 2) # (B, base, H/2, W/2)
+
+        conv_2 = self.msi_2(pool_1, inputs_1) # (B, scale*base, H/2, W/2)
+        pool_2 = nn.functional.avg_pool2d(self.conv_2(conv_2), 2, 2)
+
+        conv_3 = self.msi_3(pool_2, inputs_2)
+        pool_3 = nn.functional.avg_pool2d(self.conv_3(conv_3), 2, 2)
+
+        conv_4 = self.msi_4(pool_3, inputs_3)
+        pool_4 = nn.functional.avg_pool2d(self.conv_4(conv_4), 2, 2)
+
+        conv_5 = self.msi_5(pool_4, inputs_4)
+        conv_5 = self.conv_5(conv_5)
+
+        pam = self.pam(conv_5)
+        cam = self.cam(conv_5)
+        feature_sum = pam + cam
+        feature_sum = self.drop(feature_sum)
+        feature_sum = self.feature_conv(feature_sum)
+        feature_sum = self.feature_batchnorm(feature_sum)
+
+        up_6_conv = self.up_6_conv_1(feature_sum)
+        up_6_conv_2 = self.up_6_conv_2(feature_sum)
+        up_6 = torch.cat([up_6_conv, conv_4], dim=1)
+        conv_6 = self.conv_6(up_6)
+
+        up_7_T = nn.functional.interpolate(conv_6,
+                                           scale_factor=2,
+                                           mode='nearest')
+        up_7 = torch.cat([up_7_T, conv_3], dim=1)
+        conv_7 = self.conv_7(up_7)
+
+        up_8_T = nn.functional.interpolate(conv_7,
+                                           scale_factor=2,
+                                           mode='nearest')
+        up_8 = torch.cat([up_8_T, conv_2], dim=1)
+        conv_8 = self.conv_8(up_8)
+
+        up_9_T = nn.functional.interpolate(conv_8,
+                                           scale_factor=2,
+                                           mode='nearest')
+        up_9 = torch.cat([up_9_T, conv_1], dim=1)
+        conv_9 = self.conv_9(up_9)
+
+        conv_10 = self.inter_out_1(conv_9)
+
+        # ДРУГИЙ ПРОХІД
+        cat_input = torch.cat([conv_1, conv_9], dim=1)
+        conv_11 = self.conv_11(cat_input)
+        pool_11 = nn.functional.avg_pool2d(conv_11, 2, 2)
+
+        cat_pool_22 = torch.cat([conv_8, pool_11], dim=1)
+        conv_22 = self.conv_22(cat_pool_22)
+        pool_22 = nn.functional.avg_pool2d(conv_22, 2, 2)
+
+        cat_pool_33 = torch.cat([conv_7, pool_22], dim=1)
+        conv_33 = self.conv_33(cat_pool_33)
+        pool_33 = nn.functional.avg_pool2d(conv_33, 2, 2)
+
+        cat_pool_44 = torch.cat([conv_6, pool_33], dim=1)
+        cat_pool_44 = torch.cat([cat_pool_44, up_6_conv], dim=1)
+        conv_44 = self.conv_44(cat_pool_44)
+
+        up_conv_77 = nn.functional.interpolate(conv_44,
+                                               scale_factor=2,
+                                               mode='nearest')
+        up_77 = torch.cat([up_conv_77, conv_33], dim=1)
+        conv_77 = self.conv_77(up_77)
+
+        up_88_T = nn.functional.interpolate(conv_77,
+                                            scale_factor=2,
+                                            mode='nearest')
+        up_88 = torch.cat([up_88_T, conv_22], dim=1)
+        conv_88 = self.conv_88(up_88)
+
+        up_99_T = nn.functional.interpolate(conv_88,
+                                            scale_factor=2,
+                                            mode='nearest')
+        up_99 = torch.cat([up_99_T, conv_11], dim=1)
+        conv_99 = self.conv_99(up_99)
+
+        conv_100 = self.inter_out_2(conv_99)
+        cat_input_2 = torch.cat([conv_9, conv_99], dim=1)
+        conv_111 = self.conv_111(cat_input_2)
+        pool_111 = nn.functional.avg_pool2d(conv_111, 2, 2)
+
+        cat_pool_222 = torch.cat([conv_88, pool_111], dim=1)
+        conv_222 = self.conv_222(cat_pool_222)
+        pool_222 = nn.functional.avg_pool2d(conv_222, 2, 2)
+
+        cat_pool_333 = torch.cat([conv_77, pool_222, up_conv_77, up_6_conv_2], dim=1)
+        conv_333 = self.conv_333(cat_pool_333)
+
+        up_888_conv = nn.functional.interpolate(conv_333,
+                                                scale_factor=2,
+                                                mode='nearest')
+        up_888 = torch.cat([up_888_conv, conv_222], dim=1)
+        conv_888 = self.conv_888(up_888)
+
+        up_999_T = nn.functional.interpolate(conv_888,
+                                             scale_factor=2,
+                                             mode='nearest')
+        up_999 = torch.cat([up_999_T, conv_111], dim=1)
+        conv_999 = self.conv_999(up_999)
+
+        conv_1000 = self.inter_out3(conv_999)
+
+        return conv_10, conv_100, conv_1000
