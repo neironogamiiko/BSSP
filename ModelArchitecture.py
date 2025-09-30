@@ -449,3 +449,18 @@ class BSSPNet(nn.Module):
                                     out_channels=num_classes,
                                     kernel_size=3,
                                     padding=1)
+
+        self._init_weights()
+
+    def _init_weights(self):
+        for module in self.modules():
+            if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
+                nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='relu')
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.BatchNorm2d):
+                nn.init.ones_(module.weight)
+                nn.init.zeros_(module.bias)
+
+    def forward(self, x):
+        pass
