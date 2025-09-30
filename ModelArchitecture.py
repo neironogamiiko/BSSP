@@ -375,9 +375,34 @@ class UpSample(nn.Module):
 #         nn.init.zeros_(module.bias)
 
 class BSSPNet(nn.Module):
+    """
+    Багатошарова сегментаційна мережа.
+
+    Вхід:
+        x (torch.Tensor): Вхідний тензор зображення розміром (B, C_in, H, W), де
+                                                                                  B — розмір батчу,
+                                                                                  C_in — кількість каналів,
+                                                                                  H — висота зображення,
+                                                                                  W — ширина зображення.
+
+    Вихід:
+        tuple(torch.Tensor, torch.Tensor, torch.Tensor): Три вихідні тензори
+        (out1, out2, out3) після softmax, з розмірностями, відповідними рівням декодера:
+            - out1: найвищий рівень (B, num_classes, H, W)
+            - out2: середній рівень (B, num_classes, H/2, W/2)
+            - out3: нижчий рівень (B, num_classes, H/4, W/4)
+    """
     def __init__(self, in_channels, base=16, scale=2, num_classes=20):
+        """
+        Ініціалізація BSSPNet.
+
+        :param in_channels: Кількість каналів вхідного зображення.
+        :param base: Базова кількість фільтрів.
+        :param scale: Множник каналів на кожному рівні MSI.
+        :param num_classes: Кількість класів сегментації.
+        """
         super(BSSPNet, self).__init__()
-        self.base = base,
+        self.base = base
         self.scale = scale
         self.num_classes = num_classes
 
@@ -453,6 +478,12 @@ class BSSPNet(nn.Module):
         self._init_weights()
 
     def _init_weights(self):
+        """
+        Ініціалізація вагів мережі.
+
+        Для Conv2d і ConvTranspose2d використовується kaiming_normal_.
+        Для BatchNorm2d ваги = 1, bias = 0.
+        """
         for module in self.modules():
             if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
                 nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='relu')
@@ -463,47 +494,60 @@ class BSSPNet(nn.Module):
                 nn.init.zeros_(module.bias)
 
     def forward(self, x):
+        """
+        Forward-процес:
+            1. Обчислюються мультискейлові входи через AvgPool2d.
+            2. Проходження через енкодер (MSI + Convolution + pooling).
+            3. Обчислення уваги PAM і CAM на останньому шарі.
+            4. Об'єднання результатів уваги та обробка post_attention_conv.
+            5. Декодер з UpSample-блоками та skip-з'єднаннями.
+            6. Обчислення трьох проміжних виходів (out1, out2, out3) з softmax.
+
+        :param x: Вхідний тензор розміру (B, C_in, H, W)
+        :return: tuple(torch.Tensor, torch.Tensor, torch.Tensor) — три вихідні тензори
+                 з softmax для сегментації на різних рівнях декодера.
+        """
         # Мультискейлові входи
-        inputs_1 = self.pool1(x)
-        inputs_2 = self.pool2(x)
-        inputs_3 = self.pool3(x)
-        inputs_4 = self.pool4(x)
+        inputs_1 = self.pool1(x) # (B, C_in, H/2, W/2)
+        inputs_2 = self.pool2(x) # (B, C_in, H/4, W/4)
+        inputs_3 = self.pool3(x) # (B, C_in, H/8, W/8)
+        inputs_4 = self.pool4(x) # (B, C_in, H/16, W/16)
 
         # Енкодер
-        conv1 = self.conv1(x)
-        pool1 = self.pool_conv1(conv1)
+        conv1 = self.conv1(x) # (B, base, H, W)
+        pool1 = self.pool_conv1(conv1) # (B, base, H/2, W/2)
 
-        conv2 = self.msi2(pool1, inputs_1)
-        conv2 = self.conv2(conv2)
-        pool2 = self.pool_conv2(conv2)
+        conv2 = self.msi2(pool1, inputs_1) # (B, base*scale*2, H/2, W/2)
+        conv2 = self.conv2(conv2) # (B, base*scale, H/2, W/2)
+        pool2 = self.pool_conv2(conv2) # (B, base*scale, H/4, W/4)
 
-        conv3 = self.msi3(pool2, inputs_2)
-        conv3 = self.conv3(conv3)
-        pool3 = self.pool_conv3(conv3)
+        conv3 = self.msi3(pool2, inputs_2) # (B, base*scale**2*2, H/4, W/4)
+        conv3 = self.conv3(conv3) # (B, base*scale**2, H/4, W/4)
+        pool3 = self.pool_conv3(conv3) # (B, base*scale**2, H/8, W/8)
 
-        conv4 = self.msi4(pool3, inputs_3)
-        conv4 = self.conv4(conv4)
-        pool4 = self.pool_conv4(conv4)
+        conv4 = self.msi4(pool3, inputs_3) # (B, base*scale**3*2, H/8, W/8)
+        conv4 = self.conv4(conv4) # (B, base*scale**3, H/8, W/8)
+        pool4 = self.pool_conv4(conv4) # (B, base*scale**3, H/16, W/16)
 
-        conv5 = self.msi5(pool4, inputs_4)
-        conv5 = self.conv5(conv5)
+        conv5 = self.msi5(pool4, inputs_4) # (B, base*scale**4*2, H/16, W/16)
+        conv5 = self.conv5(conv5) # (B, base*scale**4, H/16, W/16)
 
         # Модулі уваги
-        pam_out = self.pam(conv5)
-        cam_out = self.cam(conv5)
-        feature_sum = pam_out + cam_out
-        feature_sum = self.post_attention_conv(feature_sum)
+        pam_out = self.pam(conv5) # (B, base*scale**4, H/16, W/16)
+        cam_out = self.cam(conv5) # (B, base*scale**4, H/16, W/16)
+        feature_sum = pam_out + cam_out # (B, base*scale**4, H/16, W/16)
+        feature_sum = self.post_attention_conv(feature_sum) # (B, base*scale**4, H/16, W/16)
 
         # Декодер
-        up6 = self.up6(feature_sum, conv4)
-        up7 = self.up7(up6, conv3)
-        up8 = self.up8(up7, conv2)
-        up9 = self.up9(up8, conv1)
+        up6 = self.up6(feature_sum, conv4) # (B, base*scale**3, H/8, W/8)
+        up7 = self.up7(up6, conv3) # (B, base*scale**2, H/4, W/4)
+        up8 = self.up8(up7, conv2) # (B, base*scale, H/2, W/2)
+        up9 = self.up9(up8, conv1) # (B, base, H, W)
 
         # Проміжні виходи
-        out1 = nn.functional.softmax(self.inter_out1(up9), dim=1)
-        out2 = nn.functional.softmax(self.inter_out2(up8), dim=1)
-        out3 = nn.functional.softmax(self.inter_out3(up7), dim=1)
+        out1 = nn.functional.softmax(self.inter_out1(up9), dim=1) # (B, num_classes, H, W)      - верхній рівень
+        out2 = nn.functional.softmax(self.inter_out2(up8), dim=1) # (B, num_classes, H/2, W/2)  - середній рівень
+        out3 = nn.functional.softmax(self.inter_out3(up7), dim=1) # (B, num_classes, H/4, W/4)  - низький рівень
 
         return out1, out2, out3
 
