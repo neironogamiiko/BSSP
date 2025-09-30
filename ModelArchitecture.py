@@ -475,6 +475,10 @@ class BSSPNet(nn.Module):
                                     kernel_size=3,
                                     padding=1)
 
+        # inter1/out1 - кінцевий вихід з верхнього декодера.
+        # inter2/out2 - проміжний вихід після up7/up8, тобто середній рівень декодера.
+        # inter3/out3 - проміжний вихід після up6/up7, тобто нижній рівень декодера.
+
         self._init_weights()
 
     def _init_weights(self):
@@ -550,6 +554,9 @@ class BSSPNet(nn.Module):
         out3 = nn.functional.softmax(self.inter_out3(up7), dim=1) # (B, num_classes, H/4, W/4)  - низький рівень
 
         return out1, out2, out3
+
+        # out1 відповідає повному роздільному зображенню (кінцевий результат).
+        # out2 і out3 - проміжні масштаби для допоміжних втрат.
 
 if __name__ == "__main__":
     model = BSSPNet(in_channels=1)
