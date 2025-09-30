@@ -365,14 +365,14 @@ class UpSample(nn.Module):
         x = self.conv(x)
         return x
 
-def _init_he_normal(module):
-    if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
-        nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='relu')
-        if getattr(module, 'bias', None) is not None:
-            nn.init.zeros_(module.bias)
-    if isinstance(module, nn.BatchNorm2d):
-        nn.init.ones_(module.weight)
-        nn.init.zeros_(module.bias)
+# def _init_he_normal(module):
+#     if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
+#         nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='relu')
+#         if getattr(module, 'bias', None) is not None:
+#             nn.init.zeros_(module.bias)
+#     if isinstance(module, nn.BatchNorm2d):
+#         nn.init.ones_(module.weight)
+#         nn.init.zeros_(module.bias)
 
 class BSSPNet(nn.Module):
     def __init__(self, in_channels, base=16, scale=2, num_classes=20):
@@ -388,3 +388,64 @@ class BSSPNet(nn.Module):
         self.pool4 = nn.AvgPool2d(16)
 
         # Енкодер
+        self.conv1 = Convolution(in_channels=in_channels,
+                                 out_channels=base)
+        self.pool_conv1 = nn.AvgPool2d(2)
+
+        self.msi2 = MSI(base, in_channels, base*scale)
+        self.conv2 = Convolution(in_channels=base*scale*2,
+                                 out_channels=base*scale)
+        self.pool_conv2 = nn.AvgPool2d(2)
+
+        self.msi3 = MSI(base*scale, in_channels, base*(scale**2))
+        self.conv3 = Convolution(in_channels=base*(scale**2)*2,
+                                 out_channels=base*(scale**2))
+        self.pool_conv3 = nn.AvgPool2d(2)
+
+        self.msi4 = MSI(base*(scale**2), in_channels, base*(scale**3))
+        self.conv4 = Convolution(in_channels=base*(scale**3)*2,
+                                 out_channels=base*(scale**3))
+        self.pool_conv4 = nn.AvgPool2d(2)
+
+        self.msi5 = MSI(base*(scale**3), in_channels, base*(scale**4))
+        self.conv5 = Convolution(in_channels=base*(scale**4)*2,
+                                 out_channels=base*(scale**4))
+
+        # Модулі уваги
+        self.pam = PAM(base*(scale**4))
+        self.cam = CAM()
+        self.post_attention_conv = nn.Sequential(
+            nn.Conv2d(base*(scale**4),
+                      base*(scale**4),
+                      kernel_size=3,
+                      padding=1,
+                      bias=False),
+            nn.BatchNorm2d(base*(scale**4),
+                           eps=1e-3),
+            nn.ReLU(inplace=False),
+            nn.Dropout(0.5)
+        )
+
+        # Декодер
+        self.up6 = UpSample(base*(scale**4),
+                            base*(scale**3))
+        self.up7 = UpSample(base*(scale**3),
+                            base*(scale**2))
+        self.up8 = UpSample(base*(scale**2),
+                            base*scale)
+        self.up9 = UpSample(base*scale,
+                            base)
+
+        # Виходи
+        self.inter_out1 = nn.Conv2d(in_channels=base,
+                                    out_channels=num_classes,
+                                    kernel_size=3,
+                                    padding=1)
+        self.inter_out2 = nn.Conv2d(in_channels=base,
+                                    out_channels=num_classes,
+                                    kernel_size=3,
+                                    padding=1)
+        self.inter_out3 = nn.Conv2d(in_channels=base,
+                                    out_channels=num_classes,
+                                    kernel_size=3,
+                                    padding=1)
