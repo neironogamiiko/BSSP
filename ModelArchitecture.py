@@ -437,16 +437,16 @@ class BSSPNet(nn.Module):
                             base)
 
         # Виходи
-        self.inter_out1 = nn.Conv2d(in_channels=base,
-                                    out_channels=num_classes,
+        self.inter_out1 = nn.Conv2d(base,
+                                    num_classes,
                                     kernel_size=3,
                                     padding=1)
-        self.inter_out2 = nn.Conv2d(in_channels=base,
-                                    out_channels=num_classes,
+        self.inter_out2 = nn.Conv2d(base*scale,
+                                    num_classes,
                                     kernel_size=3,
                                     padding=1)
-        self.inter_out3 = nn.Conv2d(in_channels=base,
-                                    out_channels=num_classes,
+        self.inter_out3 = nn.Conv2d(base*(scale**2),
+                                    num_classes,
                                     kernel_size=3,
                                     padding=1)
 
@@ -463,4 +463,52 @@ class BSSPNet(nn.Module):
                 nn.init.zeros_(module.bias)
 
     def forward(self, x):
-        pass
+        # Мультискейлові входи
+        inputs_1 = self.pool1(x)
+        inputs_2 = self.pool2(x)
+        inputs_3 = self.pool3(x)
+        inputs_4 = self.pool4(x)
+
+        # Енкодер
+        conv1 = self.conv1(x)
+        pool1 = self.pool_conv1(conv1)
+
+        conv2 = self.msi2(pool1, inputs_1)
+        conv2 = self.conv2(conv2)
+        pool2 = self.pool_conv2(conv2)
+
+        conv3 = self.msi3(pool2, inputs_2)
+        conv3 = self.conv3(conv3)
+        pool3 = self.pool_conv3(conv3)
+
+        conv4 = self.msi4(pool3, inputs_3)
+        conv4 = self.conv4(conv4)
+        pool4 = self.pool_conv4(conv4)
+
+        conv5 = self.msi5(pool4, inputs_4)
+        conv5 = self.conv5(conv5)
+
+        # Модулі уваги
+        pam_out = self.pam(conv5)
+        cam_out = self.cam(conv5)
+        feature_sum = pam_out + cam_out
+        feature_sum = self.post_attention_conv(feature_sum)
+
+        # Декодер
+        up6 = self.up6(feature_sum, conv4)
+        up7 = self.up7(up6, conv3)
+        up8 = self.up8(up7, conv2)
+        up9 = self.up9(up8, conv1)
+
+        # Проміжні виходи
+        out1 = nn.functional.softmax(self.inter_out1(up9), dim=1)
+        out2 = nn.functional.softmax(self.inter_out2(up8), dim=1)
+        out3 = nn.functional.softmax(self.inter_out3(up7), dim=1)
+
+        return out1, out2, out3
+
+if __name__ == "__main__":
+    model = BSSPNet(in_channels=1)
+    x = torch.randn(1, 1, 800, 640)
+    out1, out2, out3 = model(x)
+    print(out1.shape, out2.shape, out3.shape)
