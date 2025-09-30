@@ -1,9 +1,4 @@
-from pydoc import replace
-from pyexpat import features
-from unittest.mock import inplace
-
 import torch
-from networkx.algorithms.operators.product import tensor_product
 from torch import nn, optim
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -270,31 +265,105 @@ class MSI(nn.Module):
     # 2) не використовувати inplace=True для ReLU.
 
 class Convolution(nn.Module):
-    def __init__(self, in_channel, out_channel, eps=1e-3, momentum=.99):
+    """
+    Блок з двома шарами згортки (Conv2d), Batch Normalization та ReLU активацією.
+    Цей блок реалізує дві послідовні операції:
+        Conv2d -> BatchNorm2d -> ReLU -> Conv2d -> BatchNorm2d -> ReLU
+
+    Вхід:
+        x (torch.Tensor): Вхідний тензор розміру (B, C_in, H, W), де
+                                                                      B — розмір батчу,
+                                                                      C_in — кількість вхідних каналів,
+                                                                      H — висота зображення,
+                                                                      W — ширина зображення.
+
+    Вихід:
+        torch.Tensor: Вихідний тензор розміру (B, C_out, H, W), де C_out — кількість вихідних каналів.
+    """
+    def __init__(self, in_channels, out_channels, eps=1e-3, momentum=.99):
+        """
+        Ініціалізація Convolution-блоку.
+
+        :param in_channels: Вхідні канали.
+        :param out_channels: Вихідні канали.
+        :param eps: Параметр eps для BatchNorm.
+        :param momentum: Параметр моментуму для BatchNorm.
+        """
         super(Convolution, self).__init__()
         self.conv_block = nn.Sequential(
-            nn.Conv2d(in_channels=in_channel,
-                      out_channels=out_channel,
+            nn.Conv2d(in_channels=in_channels,
+                      out_channels=out_channels,
                       kernel_size=3,
                       padding=1,
                       bias=False),
-            nn.BatchNorm2d(out_channel,
+            nn.BatchNorm2d(out_channels,
                            eps=eps,
                            momentum=momentum),
             nn.ReLU(inplace=False),
-            nn.Conv2d(in_channels=out_channel,
-                      out_channels=out_channel,
+            nn.Conv2d(in_channels=out_channels,
+                      out_channels=out_channels,
                       kernel_size=3,
                       padding=1,
                       bias=False),
-            nn.BatchNorm2d(out_channel,
+            nn.BatchNorm2d(out_channels,
                            eps=eps,
                            momentum=momentum),
             nn.ReLU(inplace=False)
         )
 
     def forward(self, x):
+        """
+        Forward-процес Convolution-блоку.
+
+        :param x: Вхідний тензор розміру (B, C_in, H, W).
+        :return: Вихідний тензор розміру (B, C_out, H, W) після двох шарів Conv2d + BatchNorm + ReLU.
+        """
         return self.conv_block(x)
+
+class UpSample(nn.Module):
+    """
+    Блок для збільшення роздільної здатності (upsampling) з подальшою обробкою Convolution-блоком.
+
+    Основна ідея:
+        1. Збільшити просторові розміри вхідного тензору за допомогою ConvTranspose2d.
+        2. Конкатенувати результат з тензором зі skip-з'єднанням.
+        3. Обробити об'єднаний тензор через Convolution-блок.
+
+    Вхід:
+        x (torch.Tensor): Тензор низької роздільної здатності (B, C_in, H, W).
+        skip (torch.Tensor): Тензор високої роздільної здатності (B, C_skip, H*scale, W*scale).
+
+    Вихід:
+        torch.Tensor: Вихідний тензор після upsampling та Convolution-блоку (B, C_out, H*scale, W*scale).
+    """
+    def __init__(self, in_channels, out_channels, scale=2):
+        """
+        Ініціалізація UpSample-блоку.
+
+        :param in_channels: Кількість каналів вхідного тензору.
+        :param out_channels: Кількість каналів вихідного тензору.
+        :param scale: Фактор upsampling.
+        """
+        super().__init__()
+        self.up = nn.ConvTranspose2d(in_channels=in_channels,
+                                     out_channels=out_channels,
+                                     kernel_size=2,
+                                     stride=scale)
+        self.conv = Convolution(in_channels=out_channels * 2,
+                                out_channels=out_channels)
+
+    def forward(self, x, skip):
+        """
+        Forward-процес UpSample-блоку.
+
+        :param x: Тензор низької роздільної здатності (B, C_in, H, W).
+        :param skip: Тензор для skip-з'єднання (B, C_skip, H*scale, W*scale).
+        :return: Вихідний тензор після upsampling та Convolution-блоку (B, C_out, H*scale, W*scale).
+        """
+        x = self.up(x)
+        x = torch.cat([x, skip], dim=1)
+        x = self.conv(x)
+        return x
 
 def _init_he_normal(module):
     if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
@@ -306,310 +375,16 @@ def _init_he_normal(module):
         nn.init.zeros_(module.bias)
 
 class BSSPNet(nn.Module):
-    def __init__(self, in_channels, base=16, scale=2, num_classes=20,
-                 eps=1e-3, momentum=.99, dropout=.5):
+    def __init__(self, in_channels, base=16, scale=2, num_classes=20):
         super(BSSPNet, self).__init__()
-        self.in_channels = in_channels
-        self.base = base
+        self.base = base,
         self.scale = scale
         self.num_classes = num_classes
-        self.eps = eps
-        self.momentum = momentum
-        self.dropout = dropout
 
-        self.conv_1 = Convolution(in_channel=in_channels,
-                                  out_channel=base,
-                                  eps=eps,
-                                  momentum=momentum)
-        # AvgPool2d in forward
+        # Мультискейлові входи
+        self.pool1 = nn.AvgPool2d(2)
+        self.pool2 = nn.AvgPool2d(4)
+        self.pool3 = nn.AvgPool2d(8)
+        self.pool4 = nn.AvgPool2d(16)
 
-        def branch_out_for(level):
-            target = base * (scale ** level)
-            return target // 2
-
-        self.msi_2 = MSI(main_in_channels=base,
-                        aux_in_channels=in_channels,
-                        branch_out_channels=branch_out_for(1))
-
-        self.conv_2 = Convolution(in_channel=base * scale,
-                                  out_channel=base * scale,
-                                  eps=eps,
-                                  momentum=momentum)
-
-        self.msi_3 = MSI(main_in_channels=base * scale,
-                        aux_in_channels=in_channels,
-                        branch_out_channels=branch_out_for(2))
-
-        self.conv_3 = Convolution(in_channel= base * (scale ** 2),
-                                  out_channel= base * (scale ** 2),
-                                  eps=eps,
-                                  momentum=momentum)
-
-        self.msi_4 = MSI(main_in_channels=base * (scale ** 2),
-                         aux_in_channels=in_channels,
-                         branch_out_channels=branch_out_for(3))
-
-        self.conv_4 = Convolution(in_channel=base * (scale ** 3),
-                                  out_channel=base * (scale ** 3),
-                                  eps=eps,
-                                  momentum=momentum)
-
-        self.msi_5 = MSI(main_in_channels=base * (scale ** 3),
-                        aux_in_channels=in_channels,
-                        branch_out_channels=branch_out_for(4))
-
-        self.conv_5 = Convolution(in_channel=base * (scale ** 4),
-                                  out_channel=base * (scale ** 4),
-                                  eps=eps,
-                                  momentum=momentum)
-
-        self.pam = PAM(in_channels=base * (scale ** 4))
-        self.cam = CAM()
-
-        self.feature_conv = nn.Conv2d(in_channels=base * (scale ** 4),
-                                      out_channels=base * (scale ** 4),
-                                      kernel_size=3,
-                                      padding=1,
-                                      bias=False)
-        self.feature_batchnorm = nn.BatchNorm2d(base * (scale ** 4),
-                                                eps=eps,
-                                                momentum=momentum)
-        self.drop = nn.Dropout(dropout)
-
-        self.up_6_conv_1 = nn.ConvTranspose2d(in_channels=base * (scale ** 4),
-                                              out_channels=base * (scale ** 3),
-                                              kernel_size=2,
-                                              stride=2,
-                                              padding=0,
-                                              bias=False)
-        self.up_6_conv_2 = nn.ConvTranspose2d(in_channels=base * (scale ** 4),
-                                              out_channels=base * (scale ** 3),
-                                              kernel_size=2,
-                                              stride=2,
-                                              padding=0,
-                                              bias=False)
-
-        self.conv_6 = Convolution(in_channel=base * (scale ** 3) * 2,
-                                  out_channel=base * (scale ** 3),
-                                  eps=eps,
-                                  momentum=momentum)
-
-        self.conv_7 = Convolution(in_channel=base * (scale ** 2) * 2,
-                                  out_channel=base * (scale ** 2),
-                                  eps=eps,
-                                  momentum=momentum)
-
-        self.conv_8 = Convolution(in_channel=base * scale * 2,
-                                  out_channel=base * scale,
-                                  eps=eps,
-                                  momentum=momentum)
-
-        self.conv_9 = Convolution(in_channel=base * 2,
-                                  out_channel=base,
-                                  eps=eps,
-                                  momentum=momentum)
-
-        self.inter_out_1 = nn.Conv2d(in_channels=base,
-                                     out_channels=num_classes,
-                                     kernel_size=3,
-                                     padding=1)
-
-        self.conv_11 = Convolution(in_channel=base * 2,
-                                   out_channel=base,
-                                   eps=eps,
-                                   momentum=momentum)
-
-        self.conv_22 = Convolution(in_channel=base * scale + base,
-                                   out_channel=base * scale,
-                                   eps=eps,
-                                   momentum=momentum)
-
-        self.conv_33 = Convolution(in_channel=base * (scale ** 2) + base * scale,
-                                   out_channel=base * (scale ** 2),
-                                   eps=eps,
-                                   momentum=momentum)
-
-        self.conv_44 = Convolution(in_channel=base * (scale ** 3) * 2,
-                                   out_channel=base * (scale ** 3),
-                                   eps=eps,
-                                   momentum=momentum)
-
-        self.conv_77 = Convolution(in_channel=base * (scale ** 2) * 2,
-                                   out_channel=base * (scale ** 2),
-                                   eps=eps,
-                                   momentum=momentum)
-
-        self.conv_88 = Convolution(in_channel=base * scale * 2,
-                                   out_channel=base * scale,
-                                   eps=eps,
-                                   momentum=momentum)
-
-        self.conv_99 = Convolution(in_channel=base * 2,
-                                   out_channel=base,
-                                   eps=eps,
-                                   momentum=momentum)
-
-        self.inter_out_2 = nn.Conv2d(in_channels=base,
-                                     out_channels=num_classes,
-                                     kernel_size=3,
-                                     padding=1)
-
-        self.conv_111 = Convolution(in_channel=base * 2,
-                                    out_channel=base,
-                                    eps=eps,
-                                    momentum=momentum)
-
-        self.conv_222 = Convolution(in_channel=base * scale + base,
-                                    out_channel=base * scale,
-                                    eps=eps,
-                                    momentum=momentum)
-
-        self.conv_333 = Convolution(in_channel=base * (scale ** 2) * 2 + base * scale,
-                                    out_channel=base * (scale ** 2),
-                                    eps=eps,
-                                    momentum=momentum)
-
-        self.conv_888 = Convolution(in_channel=base * scale * 2,
-                                    out_channel=base * scale,
-                                    eps=eps,
-                                    momentum=momentum)
-
-        self.conv_999 = Convolution(in_channel=base * 2,
-                                    out_channel=base,
-                                    eps=eps,
-                                    momentum=momentum)
-
-        self.inter_out3 = nn.Conv2d(in_channels=base,
-                                    out_channels=num_classes,
-                                    kernel_size=3,
-                                    padding=1)
-
-        self.apply(_init_he_normal)
-        for module in self.modules():
-            if isinstance(module, nn.BatchNorm2d):
-                module.eps = eps
-                module.momentum = momentum
-
-    def forward(self, x):
-        inputs_1 = nn.functional.avg_pool2d(x,
-                                            kernel_size=2,
-                                            stride=2)
-        inputs_2 = nn.functional.avg_pool2d(x,
-                                            kernel_size=4,
-                                            stride=4)
-        inputs_3 = nn.functional.avg_pool2d(x,
-                                            kernel_size=8,
-                                            stride=8)
-        inputs_4 = nn.functional.avg_pool2d(x,
-                                            kernel_size=16,
-                                            stride=16)
-
-        conv_1 = self.conv_1(x) # (B, base, H, W)
-        pool_1 = nn.functional.avg_pool2d(conv_1, 2, 2) # (B, base, H/2, W/2)
-
-        conv_2 = self.msi_2(pool_1, inputs_1) # (B, scale*base, H/2, W/2)
-        pool_2 = nn.functional.avg_pool2d(self.conv_2(conv_2), 2, 2)
-
-        conv_3 = self.msi_3(pool_2, inputs_2)
-        pool_3 = nn.functional.avg_pool2d(self.conv_3(conv_3), 2, 2)
-
-        conv_4 = self.msi_4(pool_3, inputs_3)
-        pool_4 = nn.functional.avg_pool2d(self.conv_4(conv_4), 2, 2)
-
-        conv_5 = self.msi_5(pool_4, inputs_4)
-        conv_5 = self.conv_5(conv_5)
-
-        pam = self.pam(conv_5)
-        cam = self.cam(conv_5)
-        feature_sum = pam + cam
-        feature_sum = self.drop(feature_sum)
-        feature_sum = self.feature_conv(feature_sum)
-        feature_sum = self.feature_batchnorm(feature_sum)
-
-        up_6_conv = self.up_6_conv_1(feature_sum)
-        up_6_conv_2 = self.up_6_conv_2(feature_sum)
-        up_6 = torch.cat([up_6_conv, conv_4], dim=1)
-        conv_6 = self.conv_6(up_6)
-
-        up_7_T = nn.functional.interpolate(conv_6,
-                                           scale_factor=2,
-                                           mode='nearest')
-        up_7 = torch.cat([up_7_T, conv_3], dim=1)
-        conv_7 = self.conv_7(up_7)
-
-        up_8_T = nn.functional.interpolate(conv_7,
-                                           scale_factor=2,
-                                           mode='nearest')
-        up_8 = torch.cat([up_8_T, conv_2], dim=1)
-        conv_8 = self.conv_8(up_8)
-
-        up_9_T = nn.functional.interpolate(conv_8,
-                                           scale_factor=2,
-                                           mode='nearest')
-        up_9 = torch.cat([up_9_T, conv_1], dim=1)
-        conv_9 = self.conv_9(up_9)
-
-        conv_10 = self.inter_out_1(conv_9)
-
-        # ДРУГИЙ ПРОХІД
-        cat_input = torch.cat([conv_1, conv_9], dim=1)
-        conv_11 = self.conv_11(cat_input)
-        pool_11 = nn.functional.avg_pool2d(conv_11, 2, 2)
-
-        cat_pool_22 = torch.cat([conv_8, pool_11], dim=1)
-        conv_22 = self.conv_22(cat_pool_22)
-        pool_22 = nn.functional.avg_pool2d(conv_22, 2, 2)
-
-        cat_pool_33 = torch.cat([conv_7, pool_22], dim=1)
-        conv_33 = self.conv_33(cat_pool_33)
-        pool_33 = nn.functional.avg_pool2d(conv_33, 2, 2)
-
-        cat_pool_44 = torch.cat([conv_6, pool_33], dim=1)
-        cat_pool_44 = torch.cat([cat_pool_44, up_6_conv], dim=1)
-        conv_44 = self.conv_44(cat_pool_44)
-
-        up_conv_77 = nn.functional.interpolate(conv_44,
-                                               scale_factor=2,
-                                               mode='nearest')
-        up_77 = torch.cat([up_conv_77, conv_33], dim=1)
-        conv_77 = self.conv_77(up_77)
-
-        up_88_T = nn.functional.interpolate(conv_77,
-                                            scale_factor=2,
-                                            mode='nearest')
-        up_88 = torch.cat([up_88_T, conv_22], dim=1)
-        conv_88 = self.conv_88(up_88)
-
-        up_99_T = nn.functional.interpolate(conv_88,
-                                            scale_factor=2,
-                                            mode='nearest')
-        up_99 = torch.cat([up_99_T, conv_11], dim=1)
-        conv_99 = self.conv_99(up_99)
-
-        conv_100 = self.inter_out_2(conv_99)
-        cat_input_2 = torch.cat([conv_9, conv_99], dim=1)
-        conv_111 = self.conv_111(cat_input_2)
-        pool_111 = nn.functional.avg_pool2d(conv_111, 2, 2)
-
-        cat_pool_222 = torch.cat([conv_88, pool_111], dim=1)
-        conv_222 = self.conv_222(cat_pool_222)
-        pool_222 = nn.functional.avg_pool2d(conv_222, 2, 2)
-
-        cat_pool_333 = torch.cat([conv_77, pool_222, up_conv_77, up_6_conv_2], dim=1)
-        conv_333 = self.conv_333(cat_pool_333)
-
-        up_888_conv = nn.functional.interpolate(conv_333,
-                                                scale_factor=2,
-                                                mode='nearest')
-        up_888 = torch.cat([up_888_conv, conv_222], dim=1)
-        conv_888 = self.conv_888(up_888)
-
-        up_999_T = nn.functional.interpolate(conv_888,
-                                             scale_factor=2,
-                                             mode='nearest')
-        up_999 = torch.cat([up_999_T, conv_111], dim=1)
-        conv_999 = self.conv_999(up_999)
-
-        conv_1000 = self.inter_out3(conv_999)
-
-        return conv_10, conv_100, conv_1000
+        # Енкодер
