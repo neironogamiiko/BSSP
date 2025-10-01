@@ -508,7 +508,7 @@ class BSSPNet(nn.Module):
             6. Обчислення трьох проміжних виходів (out1, out2, out3) з softmax.
 
         :param x: Вхідний тензор розміру (B, C_in, H, W)
-        :return: tuple(torch.Tensor, torch.Tensor, torch.Tensor) — три вихідні тензори
+        :return: tuple(torch.Tensor, torch.Tensor, torch.Tensor) - три вихідні тензори
                  з softmax для сегментації на різних рівнях декодера.
         """
         # Мультискейлові входи
@@ -549,17 +549,81 @@ class BSSPNet(nn.Module):
         up9 = self.up9(up8, conv1) # (B, base, H, W)
 
         # Проміжні виходи
-        out1 = nn.functional.softmax(self.inter_out1(up9), dim=1) # (B, num_classes, H, W)      - верхній рівень
-        out2 = nn.functional.softmax(self.inter_out2(up8), dim=1) # (B, num_classes, H/2, W/2)  - середній рівень
-        out3 = nn.functional.softmax(self.inter_out3(up7), dim=1) # (B, num_classes, H/4, W/4)  - низький рівень
+        # # Без додаткового апсемплу:
+        # out1 = nn.functional.softmax(self.inter_out1(up9), dim=1) # (B, num_classes, H, W)      - верхній рівень
+        # out2 = nn.functional.softmax(self.inter_out2(up8), dim=1) # (B, num_classes, H/2, W/2)  - середній рівень
+        # out3 = nn.functional.softmax(self.inter_out3(up7), dim=1) # (B, num_classes, H/4, W/4)  - низький рівень
+        # # out1 відповідає повному роздільному зображенню (кінцевий результат).
+        # # out2 і out3 - проміжні масштаби для допоміжних втрат.
+
+        # З додатковим апсемплом:
+        out1 = self.inter_out1(up9)  # (B, num_classes, H, W)      - верхній рівень
+        out2 = self.inter_out2(up8)  # (B, num_classes, H/2, W/2)  - середній рівень
+        out3 = self.inter_out3(up7)  # (B, num_classes, H/4, W/4)  - низький рівень
+
+        # Додатковий апсемпл до розміру повного зображення
+        out2 = nn.functional.interpolate(out2, size=(x.shape[2], x.shape[3]), mode='bilinear', align_corners=False)
+        out3 = nn.functional.interpolate(out3, size=(x.shape[2], x.shape[3]), mode='bilinear', align_corners=False)
+
+        out1 = nn.functional.softmax(out1, dim=1) # верхній рівень
+        out2 = nn.functional.softmax(out2, dim=1) # середній рівень
+        out3 = nn.functional.softmax(out3, dim=1) # низький рівень
+        # out1, out2 та out3 відповідають повному роздільному зображенню.
 
         return out1, out2, out3
-
-        # out1 відповідає повному роздільному зображенню (кінцевий результат).
-        # out2 і out3 - проміжні масштаби для допоміжних втрат.
 
 if __name__ == "__main__":
     model = BSSPNet(in_channels=1)
     x = torch.randn(1, 1, 800, 640)
     out1, out2, out3 = model(x)
     print(out1.shape, out2.shape, out3.shape)
+
+########################################################################################################################
+# Output 1:
+#   Max absolute difference: 0.571744
+#   Mean absolute difference: 0.023441
+#   MSE: 0.001201
+#   Cosine similarity: 0.821481
+# Output 2:
+#   Max absolute difference: 0.220787
+#   Mean absolute difference: 0.024103
+#   MSE: 0.001164
+#   Cosine similarity: 0.827572
+# Output 3:
+#   Max absolute difference: 0.157939
+#   Mean absolute difference: 0.017138
+#   MSE: 0.000461
+#   Cosine similarity: 0.919026
+########################################################################################################################
+
+# TensorFlow output shapes:
+# (2, 800, 640, 20)
+# (2, 800, 640, 20)
+# (2, 800, 640, 20)
+#
+# PyTorch output shapes:
+# torch.Size([2, 20, 800, 640])
+# torch.Size([2, 20, 800, 640])
+# torch.Size([2, 20, 800, 640])
+########################################################################################################################
+
+# Max absolute difference:
+# Показує найбільшу різницю між відповідними елементами виходів.
+# Для Output 1 вона ~0.57 - це досить велика різниця, але це очікувано: випадкова ініціалізація ваг у TF та PT не гарантує однакові значення, особливо на великих шарах.
+#
+# Mean absolute difference:
+# Середня абсолютна різниця між усіма елементами.
+# Значення ~0.02–0.024 для Output 1-2, ~0.017 для Output 3 - це вже набагато менше. Тобто загальна структура виходів приблизно схожа, незважаючи на різні ваги.
+#
+# MSE (mean squared error):
+# Показує середньоквадратичну різницю.
+# Значення ~0.001–0.0005 - дуже маленьке, що підтверджує, що в більшості точок виходи близькі, а великі відхилення локальні (що і видно з max diff).
+#
+# Cosine similarity:
+# Показує, наскільки "спрямовані" виходи в багатовимірному просторі.
+# Значення 0.82–0.92 - досить висока схожість напрямку.
+# Output 3 (найнижчий рівень декодера) має найбільшу схожість - логічно, бо на нижчих рівнях мережі менше шарів впливають на випадкові ваги, ніж на верхніх.
+#
+# Висновок:
+# Хоч точні значення різні через різні початкові ваги, структура та загальні тенденції виходів збігаються.
+########################################################################################################################
