@@ -5,10 +5,12 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="9e9bf13c-8276-4069-a09b-552da7de34af" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/Model/Layers.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/Model/__init__.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Test/Mtrics.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Test/TestStep.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Train/TrainStep.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Train/ValidateStep.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ModelArchitecture.py" beforeDir="false" afterPath="$PROJECT_DIR$/Model/Architecture.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Data/BSSPData.py" beforeDir="false" afterPath="$PROJECT_DIR$/Data/BSSPData.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -49,6 +51,7 @@
   "keyToString": {
     "ModuleVcsDetector.initialDetectionPerformed": "true",
     "Python.Architecture.executor": "Run",
+    "Python.BSSPData.executor": "Run",
     "Python.ModelArchitecture.executor": "Run",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
