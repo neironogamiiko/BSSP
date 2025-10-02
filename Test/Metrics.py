@@ -79,7 +79,7 @@ def ClassicMetrics(num_classes: int, device: torch.device):
     :return: torchmetrics.MetricCollection, словник із результатами всіх метрик.
     """
     return torchmetrics.MetricCollection({
-        "accuracy": torchmetrics.classification.MulticlassAccuracy(num_classes=num_classes),
+        # "accuracy": torchmetrics.classification.MulticlassAccuracy(num_classes=num_classes),
         "precision": torchmetrics.classification.MulticlassPrecision(num_classes=num_classes, average="macro"),
         "recall": torchmetrics.classification.MulticlassRecall(num_classes=num_classes, average="macro"),
         "F1": torchmetrics.classification.MulticlassF1Score(num_classes=num_classes, average="macro")
