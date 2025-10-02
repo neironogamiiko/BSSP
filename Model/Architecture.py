@@ -79,7 +79,7 @@ class BSSPNet(nn.Module):
             nn.Dropout(0.5)
         )
 
-        # Декодер
+        # Перший декодер
         self.up6 = UpSample(base*(scale**4),
                             base*(scale**3))
         self.up7 = UpSample(base*(scale**3),
@@ -88,20 +88,55 @@ class BSSPNet(nn.Module):
                             base*scale)
         self.up9 = UpSample(base*scale,
                             base)
+        # Перший вихід
+        self.inter_out1 = nn.Conv2d(base, num_classes, kernel_size=3, padding=1)
 
-        # Виходи
-        self.inter_out1 = nn.Conv2d(base,
-                                    num_classes,
+        # Другий декодер
+        self.dec2_conv1 = Convolution(in_channels=base * 2,
+                                      out_channels=base)
+        self.pool_dec2_1 = nn.AvgPool2d(2)
+        self.dec2_conv2 = Convolution(in_channels=base * (1 + scale),
+                                      out_channels=base * scale)  # base + base*scale
+        self.pool_dec2_2 = nn.AvgPool2d(2)
+        self.dec2_conv3 = Convolution(in_channels=base * (scale + (scale ** 2)),
+                                      out_channels=base * (scale ** 2))  # base*scale + base*scale^2
+        self.pool_dec2_3 = nn.AvgPool2d(2)
+        self.dec2_conv4 = Convolution(in_channels=base * ((scale ** 2) + (scale ** 3)),
+                                      out_channels=base * (scale ** 3))  # base*scale^2 + base*scale^3
+        self.up_dec2_1 = UpSample(in_channels=base * (scale ** 3),
+                                  out_channels=base * (scale ** 2))
+        self.up_dec2_2 = UpSample(in_channels=base * (scale ** 2),
+                                  out_channels=base * scale)
+        self.up_dec2_3 = UpSample(in_channels=base * scale,
+                                  out_channels=base)
+        # Другий вихід
+        self.inter_out2 = nn.Conv2d(in_channels=base,
+                                    out_channels=num_classes,
                                     kernel_size=3,
                                     padding=1)
-        self.inter_out2 = nn.Conv2d(base*scale,
-                                    num_classes,
-                                    kernel_size=3,
-                                    padding=1)
-        self.inter_out3 = nn.Conv2d(base*(scale**2),
-                                    num_classes,
-                                    kernel_size=3,
-                                    padding=1)
+
+        # Третій декодер
+        self.dec3_conv1 = Convolution(in_channels=base * 2,
+                                      out_channels=base)
+        self.pool_dec3_1 = nn.AvgPool2d(2)
+        self.dec3_conv2 = Convolution(in_channels=base * (1 + scale),
+                                      out_channels=base * scale)
+        self.pool_dec3_2 = nn.AvgPool2d(2)
+        self.dec3_conv3 = Convolution(in_channels=base * (scale + (scale ** 2)),
+                                      out_channels=base * (scale ** 2))
+        self.pool_dec3_3 = nn.AvgPool2d(2)
+        self.dec3_conv4 = Convolution(in_channels=base * ((scale ** 2) + (scale ** 3)),
+                                      out_channels=base * (scale ** 3))
+        self.up_dec3_1 = UpSample(in_channels=base * (scale ** 3),
+                                  out_channels=base * (scale ** 2))
+        self.up_dec3_2 = UpSample(in_channels=base * (scale ** 2),
+                                  out_channels=base * scale)
+        self.up_dec3_3 = UpSample(in_channels=base * scale,
+                                  out_channels=base)
+        # Третій вихід
+        self.inter_out3 = nn.Conv2d(in_channels=base,
+                                    out_channels=num_classes,
+                                    kernel_size=3, padding=1)
 
         # inter1/out1 - кінцевий вихід з верхнього декодера.
         # inter2/out2 - проміжний вихід після up7/up8, тобто середній рівень декодера.
@@ -170,26 +205,60 @@ class BSSPNet(nn.Module):
         feature_sum = pam_out + cam_out # (B, base*scale**4, H/16, W/16)
         feature_sum = self.post_attention_conv(feature_sum) # (B, base*scale**4, H/16, W/16)
 
-        # Декодер
+        # Перший декодер
         up6 = self.up6(feature_sum, conv4) # (B, base*scale**3, H/8, W/8)
         up7 = self.up7(up6, conv3) # (B, base*scale**2, H/4, W/4)
         up8 = self.up8(up7, conv2) # (B, base*scale, H/2, W/2)
         up9 = self.up9(up8, conv1) # (B, base, H, W)
-
-        # Проміжні виходи
-        # # Без додаткового апсемплу:
-        # out1 = nn.functional.softmax(self.inter_out1(up9), dim=1) # (B, num_classes, H, W)      - верхній рівень
-        # out2 = nn.functional.softmax(self.inter_out2(up8), dim=1) # (B, num_classes, H/2, W/2)  - середній рівень
-        # out3 = nn.functional.softmax(self.inter_out3(up7), dim=1) # (B, num_classes, H/4, W/4)  - низький рівень
-        # # out1 відповідає повному роздільному зображенню (кінцевий результат).
-        # # out2 і out3 - проміжні масштаби для допоміжних втрат.
-
-        # З додатковим апсемплом:
+        # Перший вихід
         out1 = self.inter_out1(up9)  # (B, num_classes, H, W)      - верхній рівень
-        out2 = self.inter_out2(up8)  # (B, num_classes, H/2, W/2)  - середній рівень
-        out3 = self.inter_out3(up7)  # (B, num_classes, H/4, W/4)  - низький рівень
+
+        # Другий декодер
+        cat2_1 = torch.cat([conv1, up9], dim=1)
+        d2_1 = self.dec2_conv1(cat2_1)
+        p2_1 = self.pool_dec2_1(d2_1)
+
+        cat2_2 = torch.cat([up8, p2_1], dim=1)
+        d2_2 = self.dec2_conv2(cat2_2)
+        p2_2 = self.pool_dec2_2(d2_2)
+
+        cat2_3 = torch.cat([up7, p2_2], dim=1)
+        d2_3 = self.dec2_conv3(cat2_3)
+        p2_3 = self.pool_dec2_3(d2_3)
+
+        cat2_4 = torch.cat([up6, p2_3], dim=1)
+        d2_4 = self.dec2_conv4(cat2_4)
+
+        d2_up1 = self.up_dec2_1(d2_4, d2_3)
+        d2_up2 = self.up_dec2_2(d2_up1, d2_2)
+        d2_up3 = self.up_dec2_3(d2_up2, d2_1)
+        # Другий вихід
+        out2 = self.inter_out2(d2_up3) # (B, num_classes, H/2, W/2)  - середній рівень
+
+        # Третій декодер
+        cat3_1 = torch.cat([up9, d2_up3], dim=1)
+        d3_1 = self.dec3_conv1(cat3_1)
+        p3_1 = self.pool_dec3_1(d3_1)
+
+        cat3_2 = torch.cat([d2_up2, p3_1], dim=1)
+        d3_2 = self.dec3_conv2(cat3_2)
+        p3_2 = self.pool_dec3_2(d3_2)
+
+        cat3_3 = torch.cat([d2_up1, p3_2], dim=1)
+        d3_3 = self.dec3_conv3(cat3_3)
+        p3_3 = self.pool_dec3_3(d3_3)
+
+        cat3_4 = torch.cat([d2_4, p3_3], dim=1)
+        d3_4 = self.dec3_conv4(cat3_4)
+
+        d3_up1 = self.up_dec3_1(d3_4, d3_3)
+        d3_up2 = self.up_dec3_2(d3_up1, d3_2)
+        d3_up3 = self.up_dec3_3(d3_up2, d3_1)
+        # Третій вихід
+        out3 = self.inter_out3(d3_up3) # (B, num_classes, H/4, W/4)  - низький рівень
 
         # Додатковий апсемпл до розміру повного зображення
+        out1 = nn.functional.interpolate(out1, size=(x.shape[2], x.shape[3]), mode='bilinear', align_corners=False)
         out2 = nn.functional.interpolate(out2, size=(x.shape[2], x.shape[3]), mode='bilinear', align_corners=False)
         out3 = nn.functional.interpolate(out3, size=(x.shape[2], x.shape[3]), mode='bilinear', align_corners=False)
 
