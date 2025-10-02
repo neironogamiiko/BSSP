@@ -1,6 +1,19 @@
 import torch
 import torchmetrics
 
+def _get_coords_from_heatmap(heatmap: torch.Tensor):
+    """
+    Перетворює heatmap у координати ключових точок.
+    hm: (B, C, H, W)
+    повертає: coords (B, C, 2) у форматі (x, y)
+    """
+    B, C, H, W = heatmap.shape
+    heatmap_flat = heatmap.view(B, C, -1)
+    idx = heatmap_flat.argmax(dim=2)  # (B, C)
+    xs = idx // W
+    ys = idx % W
+    return torch.stack([xs, ys], dim=-1).float()  # (B, C, 2)
+
 def PCK(threshold):
     """
     Створює метрику PCK (Percentage of Correct Keypoints) для оцінки точності передбачених
@@ -13,26 +26,18 @@ def PCK(threshold):
                     y_pred (torch.Tensor): передбачені heatmaps, розмір (B, C, H, W)
                 і повертає float — відсоток правильно передбачених ключових точок по batch.
     """
+
     def pck(y_true, y_pred):
-        y_true = y_true[:,1:,...]
-        y_pred = y_pred[:,1:,...]
+        # Вирізаємо landmark'и 1–19
+        y_true = y_true[:, 1:, ...]
+        y_pred = y_pred[:, 1:, ...]
 
-        B, C, H, W = y_true.shape
-        y_true_flat = y_true.view(B, C, -1)
-        y_pred_flat = y_pred.view(B, C, -1)
+        coords_true = _get_coords_from_heatmap(y_true)
+        coords_pred = _get_coords_from_heatmap(y_pred)
 
-        idx_true = y_true_flat.argmax(dim=2)
-        xs_true = idx_true // W
-        ys_true = idx_true % W
-        coords_true = torch.stack([xs_true, ys_true], dim=-1).float()
-
-        idx_pred = y_pred_flat.argmax(dim=2)
-        xs_pred = idx_pred // W
-        ys_pred = idx_pred % W
-        coords_pred = torch.stack([xs_pred, ys_pred], dim=-1).float()
-
-        d = torch.norm(coords_true - coords_pred, dim=-1)
+        d = torch.norm(coords_true - coords_pred, dim=-1)  # (B, C)
         return (d < threshold).float().mean()
+
     return pck
 
 def NME(normalizer):
@@ -46,26 +51,17 @@ def NME(normalizer):
                     y_pred (torch.Tensor): передбачені heatmaps, розмір (B, C, H, W)
                 і повертає float — середню нормалізовану помилку по batch.
     """
+
     def nme(y_true, y_pred):
-        y_true = y_true[:,1:,...]
-        y_pred = y_pred[:,1:,...]
+        y_true = y_true[:, 1:, ...]
+        y_pred = y_pred[:, 1:, ...]
 
-        B, C, H, W = y_true.shape
-        y_true_flat = y_true.view(B, C, -1)
-        y_pred_flat = y_pred.view(B, C, -1)
-
-        idx_true = y_true_flat.argmax(dim=2)
-        xs_true = idx_true // W
-        ys_true = idx_true % W
-        coords_true = torch.stack([xs_true, ys_true], dim=-1).float()
-
-        idx_pred = y_pred_flat.argmax(dim=2)
-        xs_pred = idx_pred // W
-        ys_pred = idx_pred % W
-        coords_pred = torch.stack([xs_pred, ys_pred], dim=-1).float()
+        coords_true = _get_coords_from_heatmap(y_true)
+        coords_pred = _get_coords_from_heatmap(y_pred)
 
         d = torch.norm(coords_true - coords_pred, dim=-1)
         return d.mean() / normalizer
+
     return nme
 
 def ClassicMetrics(num_classes: int, device: torch.device):
