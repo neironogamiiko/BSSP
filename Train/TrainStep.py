@@ -14,8 +14,23 @@ def train_step(model: nn.Module,
                classic_metrics: Dict[str, nn.Module],
                use_amp: bool = True) -> Dict[str, float]:
     """
-    Один крок тренування для multi-output моделі з multi-loss.
-    Повертає усереднені метрики та loss по всьому train_loader.
+    Виконує один крок тренування для multi-output моделі з multi-loss.
+
+    :param model: Нейронна мережа для тренування.
+    :param train_loader: DataLoader з тренувальним набором даних. Повертає кортеж (images, targets).
+    :param optimizer: Оптимізатор (наприклад, Adam, RMSprop).
+    :param criterion: Функція втрат (наприклад, nn.CrossEntropyLoss()).
+    :param loss_weights: Список ваг для кожного виходу при multi-loss.
+    :param device: Пристрій для обчислень (CPU або GPU).
+    :param pck_fn: Функція для обчислення метрики PCK (Percentage of Correct Keypoints). Приймає (targets, predictions) і повертає float.
+    :param nme_fn: Функція для обчислення метрики NME (Normalized Mean Error). Приймає (targets, predictions) і повертає float.
+    :param classic_metrics: Словник з "класичними" метриками з torchmetrics. Ключ — назва метрики, значення — об'єкт метрики.
+    :param use_amp: Булеве значення, чи використовувати автоматичне змішане точне обчислення (AMP).
+    :return: Dict[str, float]: Словник з усередненими метриками для всього train_loader, включаючи:
+                          - 'loss': усереднений loss по всіх зразках
+                          - 'PCK': усереднена метрика PCK по всіх зразках
+                          - 'NME': усереднена метрика NME по всіх зразках
+                          - інші метрики з classic_metrics, обчислені через .compute()
     """
     model.train()
     total_loss = 0.0

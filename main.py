@@ -10,9 +10,11 @@ import yaml
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+# Завантаження конфігурації
 with open("Configs/base_config.yaml", "r") as file:
     config = yaml.safe_load(file)
 
+# Підготовка шляхів до даних
 IMG_TRAIN_DIR = config["path"]["img_train"]
 HM_TRAIN_DIR  = config["path"]["hm_train"]
 IMG_VAL_DIR   = config["path"]["img_val"]
@@ -20,6 +22,7 @@ HM_VAL_DIR    = config["path"]["hm_val"]
 IMG_TEST_DIR  = config["path"]["img_test"]
 HM_TEST_DIR   = config["path"]["hm_test"]
 
+# Параметри тренування
 EPOCHS = config["training"]["epochs"]
 BATCH_SIZE = config["training"]["batch_size"]
 NUM_CLASSES = config["training"]["num_classes"]
@@ -29,6 +32,7 @@ THRESHOLD = config["training"]["threshold"]
 NORMALIZER = config["training"]["normalizer"]
 LOSS_WEIGHTS = config["loss"]["loss_weights"]
 
+# Датасети та лоадери
 train_dataset = BSSPDataset(image_path=IMG_TRAIN_DIR,
                             heatmap_path=HM_TRAIN_DIR,
                             augmentation=BSSPAugmentation())
@@ -53,24 +57,29 @@ test_loader = DataLoader(dataset=test_dataset,
                           shuffle=False,
                           num_workers=4)
 
+# Модель
 model = BSSPNet(in_channels=3,
                 base=16,
                 scale=2,
                 num_classes=20).to(device=device)
 
+# Оптимізатор
 optimizer_name = config["training"]["optimizer"]["name"]
 optimizer_params = config["training"]["optimizer"]["params"]
 OptimizerClass = getattr(optim, optimizer_name)
 optimizer = OptimizerClass(model.parameters(), **optimizer_params)
 
+# Функція втрат
 criterion = nn.CrossEntropyLoss()
 
+# Scheduler
 scheduler = ReduceLROnPlateau(optimizer, mode='min',
                               factor=0.5, patience=PATIENCE_LR, min_lr=1e-6)
 
 # Класичні метрики
 classic_metrics = ClassicMetrics(num_classes=NUM_CLASSES, device=device)
 
+# Тренувальний цикл з ранньою зупинкою
 best_val_loss = float('inf')
 early_stop_counter = 0
 
@@ -85,6 +94,7 @@ for epoch in range(EPOCHS):
     val_metrics = val_step(model, validation_loader, criterion,
                            device, PCK(THRESHOLD), NME(NORMALIZER), classic_metrics)
 
+    # Scheduler
     scheduler.step(val_metrics['loss'])  # ReduceLROnPlateau слід викликати після валід. лосс
 
     # Рання зупинка
@@ -104,7 +114,7 @@ for epoch in range(EPOCHS):
     print(f"Val   Loss: {val_metrics['loss']:.4f} | PCK: {val_metrics['PCK']:.4f} | NME: {val_metrics['NME']:.4f}")
     print("-"*50)
 
-# естування після навчання
+# Тестування після навчання
 model.load_state_dict(torch.load('best_model.pth'))
 test_metrics = test_step(model, test_loader, device, PCK(THRESHOLD), NME(NORMALIZER), classic_metrics)
 print("Test metrics:", test_metrics)

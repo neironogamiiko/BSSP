@@ -10,8 +10,18 @@ def test_step(model: nn.Module,
               nme_fn: Callable,
               classic_metrics: Dict[str, nn.Module]) -> Dict[str, float]:
     """
-    Крок тестування для multi-output моделі.
-    Без loss, тільки метрики.
+    Виконує один крок тестування для multi-output моделі.
+
+    :param model: Нейронна мережа для оцінки.
+    :param test_loader: DataLoader з тестовим набором даних. Повертає кортеж (images, targets).
+    :param device: Пристрій, на якому виконуються обчислення (CPU або GPU).
+    :param pck_fn: Функція для обчислення метрики PCK (Percentage of Correct Keypoints). Приймає (targets, predictions) і повертає float.
+    :param nme_fn: Функція для обчислення метрики NME (Normalized Mean Error). Приймає (targets, predictions) і повертає float.
+    :param classic_metrics: Словник з "класичними" метриками з torchmetrics. Ключ — назва метрики, значення — об'єкт метрики.
+    :return: Dict[str, float]: Словник з усередненими метриками для всього тестового набору, включаючи:
+                          - 'PCK': усереднена метрика PCK по всіх зображеннях
+                          - 'NME': усереднена метрика NME по всіх зображеннях
+                          - інші метрики з classic_metrics, обчислені через .compute()
     """
     model.eval()
     metric_sums = {'PCK': 0.0, 'NME': 0.0}
@@ -47,14 +57,17 @@ def test_step(model: nn.Module,
             metric_sums['PCK'] += pck_batch
             metric_sums['NME'] += nme_batch
 
+    # Усереднення метрик по всьому тестовому набору
     avg_metrics = {
         'PCK': metric_sums['PCK'] / total_samples,
         'NME': metric_sums['NME'] / total_samples,
     }
 
+    # Обчислення класичних метрик
     classic_results = {k: m.compute().item() for k, m in classic_metrics.items()}
     avg_metrics.update(classic_results)
 
+    # Скидання стану класичних метрик для наступного тестування
     for m in classic_metrics.values():
         m.reset()
 

@@ -11,8 +11,20 @@ def val_step(model: nn.Module,
              nme_fn: Callable,
              classic_metrics: Dict[str, nn.Module]) -> Dict[str, float]:
     """
-    Один крок валідації для multi-output моделі.
-    Без backprop, тільки метрики і loss.
+    Виконує один крок валідації для multi-output моделі.
+
+    :param model: Нейронна мережа для валідації.
+    :param val_loader: DataLoader з валідаційним набором даних. Повертає кортеж (images, targets).
+    :param criterion: Функція втрат (наприклад, nn.CrossEntropyLoss()).
+    :param device: Пристрій для обчислень (CPU або GPU).
+    :param pck_fn: Функція для обчислення метрики PCK (Percentage of Correct Keypoints). Приймає (targets, predictions) і повертає float.
+    :param nme_fn: Функція для обчислення метрики NME (Normalized Mean Error). Приймає (targets, predictions) і повертає float.
+    :param classic_metrics: Словник з "класичними" метриками з torchmetrics. Ключ — назва метрики, значення — об'єкт метрики.
+    :return: Dict[str, float]: Словник з усередненими метриками для всього val_loader, включаючи:
+                          - 'loss': усереднений loss по всіх зразках
+                          - 'PCK': усереднена метрика PCK по всіх зразках
+                          - 'NME': усереднена метрика NME по всіх зразках
+                          - інші метрики з classic_metrics, обчислені через .compute()
     """
     model.eval()
     total_loss = 0.0
