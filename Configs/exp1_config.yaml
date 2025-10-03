@@ -1,8 +1,11 @@
 training:
   epochs: 300
   batch_size: 4 # <-----------------------------------------------------------
+  num_classes: 20
   patience_lr: 10
   patience_es: 30
+  threshold: 5.
+  normalizer: 800.
   optimizer:
     name: RMSprop
     params:
