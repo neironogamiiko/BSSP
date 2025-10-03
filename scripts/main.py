@@ -2,16 +2,16 @@ import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from Model import *
-from Data import *
-from Test import *
-from Train import *
+from model import *
+from data import *
+from test import *
+from train import *
 import yaml
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Завантаження конфігурації
-with open("Configs/base_config.yaml", "r") as file:
+with open("../configs/base_config.yaml", "r") as file:
     config = yaml.safe_load(file)
 
 # Підготовка шляхів до даних
@@ -70,7 +70,7 @@ OptimizerClass = getattr(optim, optimizer_name)
 optimizer = OptimizerClass(model.parameters(), **optimizer_params)
 
 # Функція втрат
-criterion = nn.CrossEntropyLoss()
+criterion = nn.MSELoss()
 
 # Scheduler
 scheduler = ReduceLROnPlateau(optimizer, mode='min',
@@ -117,4 +117,4 @@ for epoch in range(EPOCHS):
 # Тестування після навчання
 model.load_state_dict(torch.load('best_model.pth'))
 test_metrics = test_step(model, test_loader, device, PCK(THRESHOLD), NME(NORMALIZER), classic_metrics)
-print("Test metrics:", test_metrics)
+print("test metrics:", test_metrics)

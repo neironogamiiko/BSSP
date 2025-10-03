@@ -33,11 +33,10 @@ def val_step(model: nn.Module,
 
     with torch.inference_mode():
         for images, targets in val_loader:
-            images, targets = images.to(device), targets.to(device)
+            images = images.to(device, dtype=torch.float32)
+            targets = targets.to(device, dtype=torch.float32)
             batch_size = images.size(0)
             total_samples += batch_size
-
-            targets_idx = targets.argmax(dim=1)
 
             outs = model(images)
             if not isinstance(outs, (list, tuple)):
@@ -54,15 +53,17 @@ def val_step(model: nn.Module,
                 else:
                     o_resized = o
 
-                losses.append(criterion(o_resized, targets_idx))
+                # тепер loss напряму по soft heatmaps
+                losses.append(criterion(o_resized, targets))
 
                 o_for_metrics = o_resized
                 pck_batch += pck_fn(targets, o_for_metrics) * batch_size
                 nme_batch += nme_fn(targets, o_for_metrics) * batch_size
 
                 pred_idx = o_for_metrics.argmax(dim=1)
+                gt_idx = targets.argmax(dim=1)  # для метрик
                 for metric in classic_metrics.values():
-                    metric.update(pred_idx, targets_idx)
+                    metric.update(pred_idx, gt_idx)
 
             total_loss += sum(losses).item() * batch_size
             metric_sums['PCK'] += pck_batch

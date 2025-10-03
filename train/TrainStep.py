@@ -40,13 +40,10 @@ def train_step(model: nn.Module,
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     for images, targets in train_loader:
-        images = images.to(device)
-        targets = targets.to(device)
+        images = images.to(device, dtype=torch.float32)
+        targets = targets.to(device, dtype=torch.float32)
         batch_size = images.size(0)
         total_samples += batch_size
-
-        # CrossEntropyLoss очікує індекси класів
-        targets_idx = targets.argmax(dim=1)
 
         optimizer.zero_grad()
 
@@ -59,7 +56,6 @@ def train_step(model: nn.Module,
             pck_batch, nme_batch = 0.0, 0.0
 
             for i, o in enumerate(outs):
-                # Ресайз для CE loss
                 if o.shape[2:] != targets.shape[2:]:
                     o_resized = nn.functional.interpolate(
                         o, size=targets.shape[2:], mode='bilinear', align_corners=False
@@ -67,7 +63,7 @@ def train_step(model: nn.Module,
                 else:
                     o_resized = o
 
-                losses.append(criterion(o_resized, targets_idx))
+                losses.append(criterion(o_resized, targets))
 
                 # Ресайз для метрик
                 if o.shape[2:] != targets.shape[2:]:
@@ -82,8 +78,9 @@ def train_step(model: nn.Module,
 
                 # Класичні метрики
                 pred_idx = o_for_metrics.argmax(dim=1)
+                gt_idx = targets.argmax(dim=1)  # тільки для метрик
                 for metric in classic_metrics.values():
-                    metric.update(pred_idx, targets_idx)
+                    metric.update(pred_idx, gt_idx)
 
             total_step_loss = sum(w * l for w, l in zip(loss_weights, losses))
 

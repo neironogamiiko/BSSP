@@ -262,9 +262,9 @@ class BSSPNet(nn.Module):
         out2 = nn.functional.interpolate(out2, size=(x.shape[2], x.shape[3]), mode='bilinear', align_corners=False)
         out3 = nn.functional.interpolate(out3, size=(x.shape[2], x.shape[3]), mode='bilinear', align_corners=False)
 
-        out1 = nn.functional.softmax(out1, dim=1) # верхній рівень
-        out2 = nn.functional.softmax(out2, dim=1) # середній рівень
-        out3 = nn.functional.softmax(out3, dim=1) # низький рівень
+        # out1 = nn.functional.softmax(out1, dim=1) # верхній рівень
+        # out2 = nn.functional.softmax(out2, dim=1) # середній рівень
+        # out3 = nn.functional.softmax(out3, dim=1) # низький рівень
         # out1, out2 та out3 відповідають повному роздільному зображенню.
 
         return out1, out2, out3
