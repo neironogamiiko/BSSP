@@ -75,20 +75,19 @@ best_val_loss = float('inf')
 early_stop_counter = 0
 
 for epoch in range(EPOCHS):
-    # --- TRAIN ---
+    # Тренування
     train_metrics = train_step(model, train_loader, optimizer,
                                criterion, LOSS_WEIGHTS,
                                device, PCK(THRESHOLD), NME(NORMALIZER), classic_metrics,
                                use_amp=True)
 
-    # --- VALIDATION ---
+    # Валідація
     val_metrics = val_step(model, validation_loader, criterion,
                            device, PCK(THRESHOLD), NME(NORMALIZER), classic_metrics)
 
-    # --- Scheduler ---
     scheduler.step(val_metrics['loss'])  # ReduceLROnPlateau слід викликати після валід. лосс
 
-    # --- Early Stopping ---
+    # Рання зупинка
     if val_metrics['loss'] < best_val_loss:
         best_val_loss = val_metrics['loss']
         early_stop_counter = 0
@@ -99,13 +98,13 @@ for epoch in range(EPOCHS):
             print(f"Early stopping на {epoch+1}-му епосі")
             break
 
-    # --- Логи ---
+    # Дебаглог
     print(f"Epoch {epoch+1}/{EPOCHS}")
     print(f"Train Loss: {train_metrics['loss']:.4f} | PCK: {train_metrics['PCK']:.4f} | NME: {train_metrics['NME']:.4f}")
     print(f"Val   Loss: {val_metrics['loss']:.4f} | PCK: {val_metrics['PCK']:.4f} | NME: {val_metrics['NME']:.4f}")
     print("-"*50)
 
-# --- Тестування після навчання ---
+# естування після навчання
 model.load_state_dict(torch.load('best_model.pth'))
 test_metrics = test_step(model, test_loader, device, PCK(THRESHOLD), NME(NORMALIZER), classic_metrics)
 print("Test metrics:", test_metrics)
