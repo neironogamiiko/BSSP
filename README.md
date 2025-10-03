@@ -1,6 +1,7 @@
 PRELIMINARY RESULTS
 
 Метрики для виходів, після першого проходу через мережу:
+
     Output 1:
         Max absolute difference: 0.571744
         Mean absolute difference: 0.023441
@@ -18,6 +19,7 @@ PRELIMINARY RESULTS
         Cosine similarity: 0.919026
 
 Структура виходів:
+
     TensorFlow output shapes:
         Output 1: (2, 800, 640, 20)
         Output 2: (2, 800, 640, 20)
