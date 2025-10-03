@@ -1,5 +1,7 @@
 from .Metrics import PCK, NME, ClassicMetrics
+from .TestStep import test_step
 
 __all__ = ["PCK",
            "NME",
-           "ClassicMetrics"]
+           "ClassicMetrics",
+           "test_step"]
