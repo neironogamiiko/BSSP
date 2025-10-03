@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from Layers import *
+from .Layers import *
 
 class BSSPNet(nn.Module):
     """

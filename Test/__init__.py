@@ -1,4 +1,4 @@
-from Metrics import PCK, NME, ClassicMetrics
+from .Metrics import PCK, NME, ClassicMetrics
 
 __all__ = ["PCK",
            "NME",

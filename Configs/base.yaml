@@ -1,0 +1,27 @@
+training:
+  epochs: 300
+  batch_size: 2
+  patience_lr: 10
+  patience_es: 30
+  optimizer:
+    name: RMSprop
+    params:
+      lr: 1e-4
+      alpha: 0.9,       # TF rho
+      momentum: 0.0,    # TF momentum
+      eps: 1e-07,       # TF epsilon
+      centered: False,  # TF centered
+      weight_decay: 0.0 # TF weight_decay (None → 0.0)
+
+loss:
+  loss_weights: [.1, .5, 1.]
+
+path:
+  img_train: '/kaggle/input/images-heatmaps-separate/npy_images/train'
+  hm_train: '/kaggle/input/images-heatmaps-separate/npy_heatmaps/train'
+
+  img_val: '/kaggle/input/images-heatmaps-separate/npy_images/val'
+  hm_val: '/kaggle/input/images-heatmaps-separate/npy_heatmaps/val'
+  
+  img_test: '/kaggle/input/images-heatmaps-separate/npy_images/test'
+  hm_test: '/kaggle/input/images-heatmaps-separate/npy_heatmaps/test'
